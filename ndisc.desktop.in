@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=disco-vault
+Name=ndisc
 GenericName=Music Discography Library
 Comment=Track physical and digital music releases, share via Nostr
-Exec=@BINDIR@/disco-vault
-Icon=@ICONDIR@/disco-vault.svg
+Exec=@BINDIR@/ndisc
+Icon=@ICONDIR@/ndisc.svg
 Terminal=false
 Categories=AudioVideo;Audio;Database;
 Keywords=music;discography;collection;vinyl;flac;nostr;

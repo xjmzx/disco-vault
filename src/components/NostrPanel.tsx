@@ -216,7 +216,7 @@ export function NostrPanel({ relays, setRelays }: NostrPanelProps) {
       {phase === "loggedOut" && (
         <>
           <p className="text-xs text-muted">
-            disco-vault uses a Nostr keypair to sign your published releases.
+            ndisc uses a Nostr keypair to sign your published releases.
             Generate a new identity or paste an existing nsec — your secret
             key is stored in the OS keychain (libsecret on Linux), never in
             plain files.

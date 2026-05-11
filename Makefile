@@ -3,8 +3,8 @@ BINDIR  ?= $(PREFIX)/bin
 APPDIR  ?= $(PREFIX)/share/applications
 ICONDIR ?= $(PREFIX)/share/icons/hicolor/scalable/apps
 
-DESKTOP_OUT := $(APPDIR)/disco-vault.desktop
-TAURI_BIN   := src-tauri/target/release/disco-vault
+DESKTOP_OUT := $(APPDIR)/ndisc.desktop
+TAURI_BIN   := src-tauri/target/release/ndisc
 
 .PHONY: help deps dev build install uninstall check clean
 
@@ -37,22 +37,26 @@ check:
 
 install: $(TAURI_BIN)
 	install -d $(BINDIR) $(APPDIR) $(ICONDIR)
-	install -m 0755 $(TAURI_BIN) $(BINDIR)/disco-vault
-	install -m 0644 icon.svg     $(ICONDIR)/disco-vault.svg
+	install -m 0755 $(TAURI_BIN) $(BINDIR)/ndisc
+	install -m 0644 icon.svg     $(ICONDIR)/ndisc.svg
 	sed -e 's|@BINDIR@|$(BINDIR)|g' \
 	    -e 's|@ICONDIR@|$(ICONDIR)|g' \
-	    disco-vault.desktop.in > $(DESKTOP_OUT)
+	    ndisc.desktop.in > $(DESKTOP_OUT)
 	chmod 0644 $(DESKTOP_OUT)
+	@# Tidy up the legacy disco-vault install if it's still on disk.
+	@rm -f $(BINDIR)/disco-vault \
+	       $(APPDIR)/disco-vault.desktop \
+	       $(ICONDIR)/disco-vault.svg
 	@if command -v update-desktop-database >/dev/null 2>&1; then \
 		update-desktop-database $(APPDIR) >/dev/null 2>&1 || true; \
 	fi
 	@echo "installed to $(PREFIX)"
-	@echo "  binary  -> $(BINDIR)/disco-vault"
+	@echo "  binary  -> $(BINDIR)/ndisc"
 	@echo "  desktop -> $(DESKTOP_OUT)"
 
 uninstall:
-	rm -f $(BINDIR)/disco-vault
-	rm -f $(ICONDIR)/disco-vault.svg
+	rm -f $(BINDIR)/ndisc
+	rm -f $(ICONDIR)/ndisc.svg
 	rm -f $(DESKTOP_OUT)
 	@if command -v update-desktop-database >/dev/null 2>&1; then \
 		update-desktop-database $(APPDIR) >/dev/null 2>&1 || true; \

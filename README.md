@@ -1,4 +1,4 @@
-# disco-vault
+# ndisc
 
 Local music discography library — track and evaluate a collection of
 **physical and digital** music releases, with Nostr-backed search and
@@ -6,8 +6,8 @@ sharing.
 
 **Stack:** Tauri 2 desktop binary + React 19 + TypeScript + Tailwind v3
 + SQLite (via `rusqlite`, bundled). Catalog data lives in
-`~/.local/share/disco-vault/discography.db` (Linux); the app initialises
-the schema on first launch.
+`~/.local/share/uk.upleb.ndisc/discography.db` (Linux); the app
+initialises the schema on first launch.
 
 > **Status: scaffold.** The schema, five Rust commands (`init_db`,
 > `add_release`, `list_releases`, `delete_release`, `get_stats`), the
@@ -79,15 +79,18 @@ package is required.
 ## Quick start
 
 ```sh
-git clone https://github.com/xjmzx/disco-vault.git
-cd disco-vault
+git clone https://github.com/xjmzx/ndisc.git
+cd ndisc
 
 make deps      # npm install + cargo fetch
 make dev       # opens the Tauri window with hot reload
 ```
 
 On first launch the SQLite database is created at the platform's
-app-data directory (Linux: `~/.local/share/uk.fizx.discovault/`).
+app-data directory (Linux: `~/.local/share/uk.upleb.ndisc/`). A binary
+upgraded from the previous `disco-vault` build will automatically
+migrate the old `~/.local/share/uk.fizx.discovault/` directory and the
+libsecret nsec entry into the new locations on first run.
 
 ## Build / install / deploy
 
@@ -117,34 +120,36 @@ make build    # release build only
 make clean    # remove dist/ and src-tauri/target/
 ```
 
-The desktop entry is generated from `disco-vault.desktop.in` with the
-install paths substituted in, so it works regardless of `PREFIX`.
+The desktop entry is generated from `ndisc.desktop.in` with the install
+paths substituted in, so it works regardless of `PREFIX`.
 
 ## Layout
 
 ```
-disco-vault/
+ndisc/
 ├── src/                       # React + TS frontend
 │   ├── App.tsx                # main layout: list + detail/add + stats + nostr
 │   ├── components/             # ReleaseList, ReleaseDetail, AddReleaseForm,
-│   │                           #   StatsPanel, NostrPanel, Section
+│   │                           #   StatsPanel, NostrPanel, ImportPanel, Section
 │   ├── lib/cn.ts               # clsx + tailwind-merge helper
+│   ├── lib/cover.ts            # cover image source resolution
 │   └── lib/tauri.ts            # typed wrappers around invoke()
 ├── src-tauri/                  # Rust crate (Tauri shell + SQLite layer)
-│   ├── src/lib.rs              # schema, init_db, add/list/delete/get_stats
-│   ├── Cargo.toml              # rusqlite (bundled)
+│   ├── src/lib.rs              # schema, commands, import, publish, migrations
+│   ├── Cargo.toml              # rusqlite (bundled), lofty, nostr-sdk, keyring
 │   └── tauri.conf.json
 ├── icon.svg                          # suite-style 128px tile
-├── disco-vault.desktop.in            # .desktop template (placeholders)
+├── ndisc.desktop.in                  # .desktop template (placeholders)
 └── Makefile                          # deps / dev / build / install / uninstall
 ```
 
 ## Nostr schema (experimental — `kind:31237`)
 
-There is no standardised NIP for personal music collections, so disco-vault
+There is no standardised NIP for personal music collections, so ndisc
 defines its own event schema. It uses **parameterized replaceable events**
 (NIP-01 range `30000–39999`) so each release is addressable and updatable in
-place.
+place. The d-tag prefix is `disco-vault:<id>`, retained from the project's
+original name to keep already-published events addressable.
 
 - **Kind:** `31237` (experimental, not formally registered).
 - **Identity:** ed25519 keypair, secret key stored in the OS keychain

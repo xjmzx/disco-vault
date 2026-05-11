@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    disco_vault_lib::run()
+    ndisc_lib::run()
 }

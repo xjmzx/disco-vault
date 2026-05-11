@@ -24,7 +24,8 @@ const DEFAULT_RELAYS = [
   "wss://relay.primal.net",
 ];
 
-const RELAYS_STORAGE_KEY = "disco-vault.relays";
+const RELAYS_STORAGE_KEY = "ndisc.relays";
+const LEGACY_RELAYS_STORAGE_KEY = "disco-vault.relays";
 
 export default function App() {
   const [selected, setSelected] = useState<Release | null>(null);
@@ -32,16 +33,30 @@ export default function App() {
   const [dbPath, setDbPath] = useState<string | null>(null);
   const [dbError, setDbError] = useState<string | null>(null);
   const [relays, setRelays] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem(RELAYS_STORAGE_KEY);
-      if (raw) {
+    // Read current key first, fall back to the legacy key, then to defaults.
+    for (const key of [RELAYS_STORAGE_KEY, LEGACY_RELAYS_STORAGE_KEY]) {
+      try {
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.every((s) => typeof s === "string")) {
+        if (
+          Array.isArray(parsed) &&
+          parsed.every((s) => typeof s === "string")
+        ) {
+          // Migrate the legacy key to the new one and drop it.
+          if (key === LEGACY_RELAYS_STORAGE_KEY) {
+            try {
+              localStorage.setItem(RELAYS_STORAGE_KEY, raw);
+              localStorage.removeItem(LEGACY_RELAYS_STORAGE_KEY);
+            } catch {
+              /* ignore */
+            }
+          }
           return parsed;
         }
+      } catch {
+        /* try next key */
       }
-    } catch {
-      /* fall through to defaults */
     }
     return DEFAULT_RELAYS;
   });
@@ -104,7 +119,7 @@ export default function App() {
       <header className="mb-6 flex items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-accent tracking-tight">
-            disco<span className="text-fg">-vault</span>
+            n<span className="text-fg">disc</span>
           </h1>
           <p className="text-sm text-muted mt-1">
             physical & digital music collection · search · share via Nostr

@@ -1,4 +1,4 @@
-// Tauri commands for disco-vault. SQLite-backed local discography.
+// Tauri commands for ndisc. SQLite-backed local discography.
 // See https://tauri.app/develop/calling-rust/
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -17,8 +17,10 @@ use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
 
-const KEYRING_SERVICE: &str = "disco-vault";
+const KEYRING_SERVICE: &str = "ndisc";
 const KEYRING_USER: &str = "nostr-nsec";
+const LEGACY_KEYRING_SERVICE: &str = "disco-vault";
+const LEGACY_BUNDLE_ID: &str = "uk.fizx.discovault";
 const KIND_RELEASE: u16 = 31237;
 
 const SCHEMA: &str = r#"
@@ -1606,11 +1608,92 @@ fn import_discogs_csv(
     Ok(summary)
 }
 
+// One-shot migration from the disco-vault era. On first launch of the
+// renamed binary we move the old app-data directory and the libsecret entry
+// holding the user's nsec into the new locations. Idempotent: subsequent
+// launches see no legacy paths and bail early.
+fn migrate_legacy_data_dir(app: &tauri::AppHandle) -> Result<(), String> {
+    let Ok(home) = std::env::var("HOME") else {
+        return Ok(());
+    };
+    let old_dir = PathBuf::from(&home)
+        .join(".local")
+        .join("share")
+        .join(LEGACY_BUNDLE_ID);
+    if !old_dir.exists() {
+        return Ok(());
+    }
+    let new_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {}", e))?;
+    if new_dir.exists() {
+        // Both present — could be a partial migration or fresh install with
+        // old data still around. Don't clobber; let the user resolve.
+        eprintln!(
+            "ndisc: both {} and {} exist; skipping data-dir migration",
+            old_dir.display(),
+            new_dir.display()
+        );
+        return Ok(());
+    }
+    if let Some(parent) = new_dir.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::rename(&old_dir, &new_dir).map_err(|e| {
+        format!(
+            "rename {} -> {}: {}",
+            old_dir.display(),
+            new_dir.display(),
+            e
+        )
+    })?;
+    eprintln!(
+        "ndisc: migrated app data {} -> {}",
+        old_dir.display(),
+        new_dir.display()
+    );
+    Ok(())
+}
+
+fn migrate_legacy_keychain() -> Result<(), String> {
+    let old = Entry::new(LEGACY_KEYRING_SERVICE, KEYRING_USER)
+        .map_err(|e| e.to_string())?;
+    let secret = match old.get_password() {
+        Ok(s) => s,
+        Err(keyring::Error::NoEntry) => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let new = Entry::new(KEYRING_SERVICE, KEYRING_USER).map_err(|e| e.to_string())?;
+    match new.get_password() {
+        Ok(_) => return Ok(()), // already migrated; leave old as-is for safety
+        Err(keyring::Error::NoEntry) => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    new.set_password(&secret).map_err(|e| e.to_string())?;
+    // Only delete the legacy entry after a successful write to the new one.
+    let _ = old.delete_credential();
+    eprintln!(
+        "ndisc: migrated keychain entry {} -> {}",
+        LEGACY_KEYRING_SERVICE, KEYRING_SERVICE
+    );
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            if let Err(e) = migrate_legacy_data_dir(&app.handle()) {
+                eprintln!("ndisc: data-dir migration error: {}", e);
+            }
+            if let Err(e) = migrate_legacy_keychain() {
+                eprintln!("ndisc: keychain migration error: {}", e);
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             init_db,
             set_db_path,

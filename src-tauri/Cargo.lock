@@ -937,26 +937,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "disco-vault"
-version = "0.1.0"
-dependencies = [
- "csv",
- "keyring",
- "lofty",
- "nostr",
- "nostr-sdk",
- "rusqlite",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "tokio",
- "walkdir",
-]
-
-[[package]]
 name = "dispatch2"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2435,6 +2415,26 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ndisc"
+version = "0.1.0"
+dependencies = [
+ "csv",
+ "keyring",
+ "lofty",
+ "nostr",
+ "nostr-sdk",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "tokio",
+ "walkdir",
 ]
 
 [[package]]
