@@ -1,7 +1,26 @@
-import { useEffect, useState } from "react";
-import { Disc3, RefreshCw, Search } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  ChevronDown,
+  Disc3,
+  FolderSearch,
+  ImageOff,
+  RefreshCw,
+  Search,
+  Wand2,
+} from "lucide-react";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Section } from "./Section";
-import { listReleases, type Release } from "../lib/tauri";
+import {
+  extractEmbeddedCovers,
+  listReleases,
+  rescanLocalCovers,
+  setCoverArtUrl,
+  type ExtractSummary,
+  type ImportProgress,
+  type Release,
+  type RescanSummary,
+} from "../lib/tauri";
+import { coverImageSrc } from "../lib/cover";
 import { cn } from "../lib/cn";
 
 interface Props {
@@ -15,15 +34,141 @@ type MediumFilter = "" | "physical" | "digital";
 export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
   const [query, setQuery] = useState("");
   const [medium, setMedium] = useState<MediumFilter>("");
+  const [needsCoverOnly, setNeedsCoverOnly] = useState(false);
   const [items, setItems] = useState<Release[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Inline cover-paste state (only used when needsCoverOnly is true).
+  const [drafts, setDrafts] = useState<Map<number, string>>(new Map());
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const [autoFocusPending, setAutoFocusPending] = useState(false);
+  const inputRefs = useRef<Map<number, HTMLInputElement>>(new Map());
+
+  // Cover-cleanup background ops. Extract reads embedded artwork from audio
+  // file tags; rescan walks album directories for a wider set of cover
+  // filename patterns.
+  type OpKind = "extract" | "rescan";
+  const [activeOp, setActiveOp] = useState<OpKind | null>(null);
+  const [opProgress, setOpProgress] = useState<ImportProgress | null>(null);
+  const [opSummary, setOpSummary] = useState<
+    | { kind: "extract"; data: ExtractSummary }
+    | { kind: "rescan"; data: RescanSummary }
+    | null
+  >(null);
+
+  function setDraft(id: number, value: string) {
+    setDrafts((prev) => {
+      const next = new Map(prev);
+      next.set(id, value);
+      return next;
+    });
+  }
+
+  async function runBackgroundOp(kind: OpKind) {
+    if (activeOp !== null) return;
+    const config =
+      kind === "extract"
+        ? {
+            prompt:
+              "Scan digital releases without a cover and extract embedded " +
+                "artwork from their audio file tags?\n\n" +
+                "For each release with embedded artwork, a file named " +
+                "cover-extracted.{jpg,png,…} will be written into the album " +
+                "directory and used as the local cover.",
+            startEvent: "extract:started",
+            progressEvent: "extract:progress",
+          }
+        : {
+            prompt:
+              "Re-scan album directories for cover-art image files using " +
+                "broader filename matching (albumart.*, art.*, files named " +
+                "after the album, etc.)?\n\n" +
+                "Only releases that still have no cover will be touched — " +
+                "no existing data is overwritten.",
+            startEvent: "rescan:started",
+            progressEvent: "rescan:progress",
+          };
+
+    if (!confirm(config.prompt)) return;
+
+    setActiveOp(kind);
+    setOpSummary(null);
+    setOpProgress({ current: 0, total: 0, currentDir: "" });
+    setError(null);
+
+    const unlisteners: UnlistenFn[] = [];
+    try {
+      unlisteners.push(
+        await listen<number>(config.startEvent, (e) => {
+          setOpProgress((p) => ({
+            current: p?.current ?? 0,
+            total: e.payload,
+            currentDir: p?.currentDir ?? "",
+          }));
+        }),
+      );
+      unlisteners.push(
+        await listen<ImportProgress>(config.progressEvent, (e) => {
+          setOpProgress(e.payload);
+        }),
+      );
+
+      if (kind === "extract") {
+        const data = await extractEmbeddedCovers();
+        setOpSummary({ kind: "extract", data });
+      } else {
+        const data = await rescanLocalCovers();
+        setOpSummary({ kind: "rescan", data });
+      }
+      await reload();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      unlisteners.forEach((f) => f());
+      setActiveOp(null);
+    }
+  }
+
+  async function saveCover(releaseId: number) {
+    const url = drafts.get(releaseId)?.trim();
+    if (!url || savingId !== null) return;
+    setSavingId(releaseId);
+    setError(null);
+    try {
+      await setCoverArtUrl(releaseId, url);
+      const savedIdx = items.findIndex((r) => r.id === releaseId);
+      const nextId =
+        savedIdx >= 0 && savedIdx + 1 < items.length
+          ? items[savedIdx + 1].id
+          : undefined;
+      setItems((prev) => prev.filter((r) => r.id !== releaseId));
+      setDrafts((prev) => {
+        const next = new Map(prev);
+        next.delete(releaseId);
+        return next;
+      });
+      if (nextId !== undefined) {
+        requestAnimationFrame(() => {
+          inputRefs.current.get(nextId)?.focus();
+        });
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSavingId(null);
+    }
+  }
 
   async function reload() {
     setLoading(true);
     setError(null);
     try {
-      const list = await listReleases(query, medium || undefined);
+      const list = await listReleases(
+        query,
+        medium || undefined,
+        needsCoverOnly ? true : undefined,
+      );
       setItems(list);
     } catch (e) {
       setError(String(e));
@@ -35,7 +180,29 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
   useEffect(() => {
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reloadKey, medium]);
+  }, [reloadKey, medium, needsCoverOnly]);
+
+  // When the no-cover filter is turned on, autofocus the first row's URL
+  // input once the list has loaded.
+  useEffect(() => {
+    if (needsCoverOnly) {
+      setAutoFocusPending(true);
+    } else {
+      setDrafts(new Map());
+      inputRefs.current.clear();
+    }
+  }, [needsCoverOnly]);
+
+  useEffect(() => {
+    if (!autoFocusPending || items.length === 0) return;
+    const firstId = items[0].id;
+    if (firstId !== undefined) {
+      requestAnimationFrame(() => {
+        inputRefs.current.get(firstId)?.focus();
+      });
+    }
+    setAutoFocusPending(false);
+  }, [items, autoFocusPending]);
 
   return (
     <Section
@@ -44,6 +211,9 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
       right={
         <span className="text-xs text-muted">
           {items.length} {items.length === 1 ? "release" : "releases"}
+          {needsCoverOnly && (
+            <span className="ml-1 text-warn">· no cover</span>
+          )}
         </span>
       }
       className="h-full"
@@ -66,16 +236,70 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
             spellCheck={false}
           />
         </div>
-        <select
-          value={medium}
-          onChange={(e) => setMedium(e.target.value as MediumFilter)}
-          className="px-2 py-2 rounded-md bg-surface text-fg text-xs outline-none
-                     border border-transparent focus:border-accent/50"
+        <div className="relative">
+          <select
+            value={medium}
+            onChange={(e) => setMedium(e.target.value as MediumFilter)}
+            className="appearance-none pl-2.5 pr-7 py-2 rounded-md bg-accent text-bg
+                       text-xs font-semibold outline-none border border-transparent
+                       focus:border-fg/30 cursor-pointer"
+          >
+            <option value="">all</option>
+            <option value="physical">physical</option>
+            <option value="digital">digital</option>
+          </select>
+          <ChevronDown
+            size={12}
+            strokeWidth={2.5}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-bg
+                       pointer-events-none"
+          />
+        </div>
+        <button
+          onClick={() => setNeedsCoverOnly((v) => !v)}
+          className={cn(
+            "p-2 rounded-md text-fg",
+            needsCoverOnly
+              ? "bg-accent text-bg"
+              : "bg-surface hover:bg-surfaceHover",
+          )}
+          title={
+            needsCoverOnly
+              ? "Showing only releases without a cover (click to clear)"
+              : "Show only releases without a cover"
+          }
+          aria-pressed={needsCoverOnly}
         >
-          <option value="">all</option>
-          <option value="physical">physical</option>
-          <option value="digital">digital</option>
-        </select>
+          <ImageOff size={14} />
+        </button>
+        <button
+          onClick={() => runBackgroundOp("extract")}
+          disabled={activeOp !== null}
+          className="p-2 rounded-md bg-surface hover:bg-surfaceHover text-fg
+                     disabled:opacity-50"
+          title="Extract embedded artwork from audio files (digital releases without a cover)"
+        >
+          <Wand2
+            size={14}
+            className={
+              activeOp === "extract" ? "animate-pulse text-accent" : ""
+            }
+          />
+        </button>
+        <button
+          onClick={() => runBackgroundOp("rescan")}
+          disabled={activeOp !== null}
+          className="p-2 rounded-md bg-surface hover:bg-surfaceHover text-fg
+                     disabled:opacity-50"
+          title="Scan album directories for cover image files (broader filename matching)"
+        >
+          <FolderSearch
+            size={14}
+            className={
+              activeOp === "rescan" ? "animate-pulse text-accent" : ""
+            }
+          />
+        </button>
         <button
           onClick={reload}
           disabled={loading}
@@ -91,52 +315,221 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
         <p className="mt-2 text-xs text-alert font-mono break-all">{error}</p>
       )}
 
+      {activeOp && opProgress && (
+        <div className="mt-2 px-3 py-2 rounded-md bg-surface/40 text-xs">
+          <div className="flex justify-between text-muted">
+            <span>
+              {activeOp === "extract"
+                ? "extracting embedded artwork"
+                : "scanning for local cover files"}{" "}
+              <span className="font-mono text-fg">
+                {opProgress.current.toLocaleString()}/
+                {(opProgress.total || 0).toLocaleString()}
+              </span>
+            </span>
+          </div>
+          <div className="mt-1 h-1.5 rounded-full bg-surface overflow-hidden">
+            <div
+              className="h-full bg-accent transition-[width] duration-150"
+              style={{
+                width: `${
+                  opProgress.total > 0
+                    ? Math.min(
+                        100,
+                        (opProgress.current / opProgress.total) * 100,
+                      )
+                    : 0
+                }%`,
+              }}
+            />
+          </div>
+          <div className="mt-1 text-[10px] font-mono text-fg/60 truncate">
+            {opProgress.currentDir}
+          </div>
+        </div>
+      )}
+
+      {!activeOp && opSummary && (
+        <div className="mt-2 px-3 py-2 rounded-md bg-surface/40 text-xs
+                        flex items-center justify-between gap-2">
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+            {opSummary.kind === "extract" ? (
+              <>
+                <span className="text-ok">
+                  extracted{" "}
+                  <span className="font-mono">{opSummary.data.extracted}</span>
+                </span>
+                <span className="text-muted">
+                  no embedded{" "}
+                  <span className="font-mono">
+                    {opSummary.data.noEmbedded}
+                  </span>
+                </span>
+                {opSummary.data.noAudio > 0 && (
+                  <span className="text-muted">
+                    no audio{" "}
+                    <span className="font-mono">{opSummary.data.noAudio}</span>
+                  </span>
+                )}
+              </>
+            ) : (
+              <>
+                <span className="text-ok">
+                  matched{" "}
+                  <span className="font-mono">{opSummary.data.matched}</span>
+                </span>
+                <span className="text-muted">
+                  no match{" "}
+                  <span className="font-mono">{opSummary.data.noMatch}</span>
+                </span>
+                {opSummary.data.noDir > 0 && (
+                  <span className="text-muted">
+                    no dir{" "}
+                    <span className="font-mono">{opSummary.data.noDir}</span>
+                  </span>
+                )}
+              </>
+            )}
+            {opSummary.data.errors.length > 0 && (
+              <span className="text-alert">
+                errors{" "}
+                <span className="font-mono">
+                  {opSummary.data.errors.length}
+                </span>
+              </span>
+            )}
+          </div>
+          <button
+            onClick={() => setOpSummary(null)}
+            className="text-muted hover:text-fg text-[10px] px-1"
+            title="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       <ul className="mt-1 flex-1 overflow-auto rounded-md
                      divide-y divide-surface/60 bg-bg/50 max-h-[60vh]">
         {items.length === 0 && !loading && !error && (
           <li className="px-3 py-3 text-muted text-xs">
-            Empty library — add your first release on the right.
+            {needsCoverOnly
+              ? "All releases in this view have cover art."
+              : "Empty library — add your first release on the right."}
           </li>
         )}
-        {items.map((r) => (
-          <li
-            key={r.id}
-            onClick={() => onSelect(r)}
-            className={cn(
-              "px-3 py-2 cursor-pointer hover:bg-surface/40 text-xs",
-              "flex justify-between items-center gap-2",
-              selected?.id === r.id && "bg-surface/70",
-            )}
-          >
-            <div className="min-w-0 flex-1">
-              <div
-                className={cn(
-                  "truncate",
-                  selected?.id === r.id ? "text-accent" : "text-fg",
+        {items.map((r) => {
+          const thumb = coverImageSrc(r);
+          const showInlineEditor = needsCoverOnly && r.id !== undefined;
+          const draftValue = r.id !== undefined ? drafts.get(r.id) ?? "" : "";
+          const saveDisabled =
+            !draftValue.trim() || savingId !== null;
+          return (
+            <li
+              key={r.id}
+              onClick={() => onSelect(r)}
+              className={cn(
+                "px-3 py-2 cursor-pointer hover:bg-surface/40 text-xs",
+                "flex flex-col gap-1.5",
+                selected?.id === r.id && "bg-surface/70",
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <div
+                  className="shrink-0 w-9 h-9 rounded bg-surface overflow-hidden
+                             flex items-center justify-center"
+                >
+                  {thumb ? (
+                    <img
+                      src={thumb}
+                      alt=""
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                      onError={(e) => {
+                        (e.currentTarget as HTMLImageElement).style.display =
+                          "none";
+                      }}
+                    />
+                  ) : (
+                    <Disc3 size={14} className="text-muted/60" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div
+                    className={cn(
+                      "truncate",
+                      selected?.id === r.id ? "text-accent" : "text-fg",
+                    )}
+                  >
+                    {r.artist} <span className="text-muted">·</span> {r.title}
+                  </div>
+                  <div className="text-muted text-[10px] truncate">
+                    {[r.year, r.format, r.label, r.catalogNumber]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </div>
+                </div>
+                {r.medium && (
+                  <span
+                    className={cn(
+                      "shrink-0 text-[10px] px-1.5 py-0.5 rounded",
+                      r.medium === "digital"
+                        ? "bg-accent/20 text-accent"
+                        : "bg-ok/20 text-ok",
+                    )}
+                  >
+                    {r.medium}
+                  </span>
                 )}
-              >
-                {r.artist} <span className="text-muted">·</span> {r.title}
               </div>
-              <div className="text-muted text-[10px] truncate">
-                {[r.year, r.format, r.label, r.catalogNumber]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </div>
-            </div>
-            {r.medium && (
-              <span
-                className={cn(
-                  "shrink-0 text-[10px] px-1.5 py-0.5 rounded",
-                  r.medium === "digital"
-                    ? "bg-accent/20 text-accent"
-                    : "bg-ok/20 text-ok",
-                )}
-              >
-                {r.medium}
-              </span>
-            )}
-          </li>
-        ))}
+
+              {showInlineEditor && (
+                <div
+                  className="flex gap-1.5 items-center pl-11"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    ref={(el) => {
+                      if (r.id !== undefined) {
+                        if (el) inputRefs.current.set(r.id, el);
+                        else inputRefs.current.delete(r.id);
+                      }
+                    }}
+                    type="text"
+                    value={draftValue}
+                    onChange={(e) =>
+                      r.id !== undefined && setDraft(r.id, e.target.value)
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        if (r.id !== undefined) saveCover(r.id);
+                      }
+                    }}
+                    placeholder="https://i.nostr.build/…"
+                    className="flex-1 px-2 py-1 rounded bg-surface text-fg
+                               text-[10px] font-mono outline-none border
+                               border-transparent focus:border-accent/50"
+                    spellCheck={false}
+                    autoComplete="off"
+                  />
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (r.id !== undefined) saveCover(r.id);
+                    }}
+                    disabled={saveDisabled}
+                    className="px-2 py-1 rounded bg-accent text-bg font-semibold
+                               hover:opacity-90 disabled:opacity-50
+                               disabled:cursor-not-allowed text-[10px]"
+                  >
+                    {savingId === r.id ? "…" : "save"}
+                  </button>
+                </div>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </Section>
   );

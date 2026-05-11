@@ -1,13 +1,97 @@
-import { Trash2, FileMusic } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  Check,
+  Copy,
+  ExternalLink,
+  FileMusic,
+  Image as ImageIcon,
+  Pencil,
+  Trash2,
+  Undo2,
+  Upload,
+} from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Section } from "./Section";
-import { deleteRelease, type Release } from "../lib/tauri";
+import { coverImageSrc } from "../lib/cover";
+import {
+  deleteRelease,
+  publishRelease,
+  setCoverArtUrl,
+  unpublishRelease,
+  type PublishResult,
+  type Release,
+} from "../lib/tauri";
 
 interface Props {
   release: Release;
+  relays: string[];
   onDeleted: () => void;
+  onChanged: (updated: Release) => void;
 }
 
-export function ReleaseDetail({ release, onDeleted }: Props) {
+type PublishAction = "publish" | "unpublish";
+
+export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) {
+  const [publishing, setPublishing] = useState(false);
+  const [unpublishing, setUnpublishing] = useState(false);
+  const [publishResult, setPublishResult] = useState<PublishResult | null>(
+    null,
+  );
+  const [lastAction, setLastAction] = useState<PublishAction | null>(null);
+  const [publishError, setPublishError] = useState<string | null>(null);
+
+  const [editingCover, setEditingCover] = useState(false);
+  const [coverDraft, setCoverDraft] = useState("");
+  const [coverSaving, setCoverSaving] = useState(false);
+  const [coverError, setCoverError] = useState<string | null>(null);
+
+  // Reset publish + cover state when switching to a different release.
+  useEffect(() => {
+    setPublishResult(null);
+    setLastAction(null);
+    setPublishError(null);
+    setEditingCover(false);
+    setCoverDraft("");
+    setCoverError(null);
+  }, [release.id]);
+
+  async function saveCoverUrl() {
+    if (!release.id) return;
+    setCoverSaving(true);
+    setCoverError(null);
+    try {
+      const trimmed = coverDraft.trim();
+      const next = trimmed.length > 0 ? trimmed : null;
+      await setCoverArtUrl(release.id, next);
+      setEditingCover(false);
+      setCoverDraft("");
+      onChanged({ ...release, coverArtUrl: next });
+    } catch (e) {
+      setCoverError(String(e));
+    } finally {
+      setCoverSaving(false);
+    }
+  }
+
+  async function clearCoverUrl() {
+    if (!release.id) return;
+    if (!confirm("Clear the cover URL for this release?")) return;
+    setCoverSaving(true);
+    setCoverError(null);
+    try {
+      await setCoverArtUrl(release.id, null);
+      setEditingCover(false);
+      setCoverDraft("");
+      onChanged({ ...release, coverArtUrl: null });
+    } catch (e) {
+      setCoverError(String(e));
+    } finally {
+      setCoverSaving(false);
+    }
+  }
+
+  const coverSrc = coverImageSrc(release);
+
   async function onDelete() {
     if (!release.id) return;
     if (!confirm(`Delete "${release.artist} — ${release.title}"?`)) return;
@@ -16,6 +100,53 @@ export function ReleaseDetail({ release, onDeleted }: Props) {
       onDeleted();
     } catch (e) {
       alert(String(e));
+    }
+  }
+
+  async function onPublish() {
+    if (!release.id) return;
+    if (relays.length === 0) {
+      setPublishError("Add at least one relay in the Sync · Nostr panel.");
+      return;
+    }
+    setPublishing(true);
+    setPublishError(null);
+    setPublishResult(null);
+    setLastAction("publish");
+    try {
+      const result = await publishRelease(release.id, relays);
+      setPublishResult(result);
+    } catch (e) {
+      setPublishError(String(e));
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  async function onUnpublish() {
+    if (!release.id) return;
+    if (relays.length === 0) {
+      setPublishError("Add at least one relay in the Sync · Nostr panel.");
+      return;
+    }
+    if (
+      !confirm(
+        `Send NIP-09 deletion request for "${release.artist} — ${release.title}"?\n\nThis asks every configured relay to remove the published event. Well-behaved relays honour it; some may ignore the request.`,
+      )
+    ) {
+      return;
+    }
+    setUnpublishing(true);
+    setPublishError(null);
+    setPublishResult(null);
+    setLastAction("unpublish");
+    try {
+      const result = await unpublishRelease(release.id, relays);
+      setPublishResult(result);
+    } catch (e) {
+      setPublishError(String(e));
+    } finally {
+      setUnpublishing(false);
     }
   }
 
@@ -46,9 +177,36 @@ export function ReleaseDetail({ release, onDeleted }: Props) {
         </button>
       }
     >
-      <div className="text-fg font-semibold text-base">{release.artist}</div>
+      <div className="flex gap-3 items-start">
+        <CoverArt
+          src={coverSrc}
+          alt={`${release.artist} — ${release.title}`}
+          editing={editingCover}
+          coverDraft={coverDraft}
+          coverSaving={coverSaving}
+          hasUrl={Boolean(release.coverArtUrl?.trim())}
+          onStartEdit={() => {
+            setCoverDraft(release.coverArtUrl ?? "");
+            setEditingCover(true);
+          }}
+          onCancelEdit={() => {
+            setEditingCover(false);
+            setCoverDraft("");
+            setCoverError(null);
+          }}
+          onChangeDraft={setCoverDraft}
+          onSave={saveCoverUrl}
+          onClear={clearCoverUrl}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="text-fg font-semibold text-base">{release.artist}</div>
+          {coverError && (
+            <div className="mt-1 text-alert text-[10px]">{coverError}</div>
+          )}
+        </div>
+      </div>
 
-      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs mt-2">
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1.5 text-xs mt-3">
         {fields.map(([label, value]) =>
           value == null || value === "" ? null : (
             <DLRow key={label} label={label} value={String(value)} />
@@ -62,6 +220,91 @@ export function ReleaseDetail({ release, onDeleted }: Props) {
           <p className="whitespace-pre-wrap text-fg/90">{release.notes}</p>
         </div>
       )}
+
+      <div className="mt-4 pt-3 border-t border-surface/60">
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={onPublish}
+            disabled={publishing || unpublishing || relays.length === 0}
+            className="px-3 py-1.5 rounded-md bg-accent text-bg font-semibold
+                       hover:opacity-90 disabled:opacity-50
+                       disabled:cursor-not-allowed flex items-center gap-2 text-xs"
+            title={
+              relays.length === 0
+                ? "Add a relay in the Sync · Nostr panel first"
+                : "Publish this release as a kind:31237 event"
+            }
+          >
+            <Upload size={12} />
+            {publishing ? "publishing…" : "Publish to Nostr"}
+          </button>
+          <button
+            onClick={onUnpublish}
+            disabled={publishing || unpublishing || relays.length === 0}
+            className="px-3 py-1.5 rounded-md bg-surface hover:bg-surfaceHover
+                       text-muted hover:text-alert disabled:opacity-50
+                       disabled:cursor-not-allowed flex items-center gap-2 text-xs"
+            title="Send NIP-09 deletion request for the published event"
+          >
+            <Undo2 size={12} />
+            {unpublishing ? "unpublishing…" : "Unpublish"}
+          </button>
+        </div>
+
+        {publishError && (
+          <div className="mt-2 text-alert text-xs">{publishError}</div>
+        )}
+
+        {publishResult && (
+          <div className="mt-2 text-xs space-y-2">
+            {lastAction === "publish" && publishResult.naddr && (
+              <NaddrRow naddr={publishResult.naddr} />
+            )}
+
+            <details className="text-muted">
+              <summary className="cursor-pointer">
+                {lastAction === "unpublish"
+                  ? "deletion request id"
+                  : "event id"}{" "}
+                <span className="font-mono text-fg/60">
+                  {publishResult.eventId.slice(0, 16)}…
+                </span>
+              </summary>
+              <div className="mt-1 font-mono text-[10px] text-fg/70 break-all">
+                {publishResult.eventId}
+              </div>
+            </details>
+
+            {publishResult.acceptedBy.length > 0 && (
+              <div className="text-ok">
+                {lastAction === "unpublish" ? "delete request " : ""}
+                accepted by {publishResult.acceptedBy.length} of{" "}
+                {publishResult.acceptedBy.length +
+                  publishResult.rejected.length}
+                :{" "}
+                <span className="font-mono">
+                  {publishResult.acceptedBy.join(", ")}
+                </span>
+              </div>
+            )}
+            {publishResult.rejected.length > 0 && (
+              <details>
+                <summary className="text-warn cursor-pointer">
+                  {publishResult.rejected.length} relay
+                  {publishResult.rejected.length === 1 ? "" : "s"} rejected
+                </summary>
+                <ul className="mt-1 font-mono text-[10px] text-alert/90 space-y-0.5">
+                  {publishResult.rejected.map((r, i) => (
+                    <li key={i} className="break-all">
+                      {r.relay} — {r.error}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        )}
+      </div>
     </Section>
   );
 }
@@ -74,5 +317,171 @@ function DLRow({ label, value }: { label: string; value: string }) {
         {value}
       </dd>
     </>
+  );
+}
+
+interface CoverArtProps {
+  src: string | null;
+  alt: string;
+  editing: boolean;
+  coverDraft: string;
+  coverSaving: boolean;
+  hasUrl: boolean;
+  onStartEdit: () => void;
+  onCancelEdit: () => void;
+  onChangeDraft: (v: string) => void;
+  onSave: () => void;
+  onClear: () => void;
+}
+
+function CoverArt({
+  src,
+  alt,
+  editing,
+  coverDraft,
+  coverSaving,
+  hasUrl,
+  onStartEdit,
+  onCancelEdit,
+  onChangeDraft,
+  onSave,
+  onClear,
+}: CoverArtProps) {
+  return (
+    <div className="shrink-0 w-[195px]">
+      <div className="relative w-[195px] h-[195px] rounded-md bg-surface
+                      overflow-hidden flex items-center justify-center">
+        {src ? (
+          <img
+            src={src}
+            alt={alt}
+            className="w-full h-full object-cover"
+            loading="lazy"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.display = "none";
+            }}
+          />
+        ) : (
+          <div className="text-muted flex flex-col items-center gap-1 text-[10px]">
+            <ImageIcon size={28} strokeWidth={1.5} />
+            <span>no cover</span>
+          </div>
+        )}
+        {!editing && (
+          <button
+            onClick={onStartEdit}
+            className="absolute bottom-1 right-1 px-1.5 py-1 rounded
+                       bg-bg/80 hover:bg-bg text-fg/90 flex items-center
+                       gap-1 text-[10px]"
+            title="Set cover URL"
+          >
+            <Pencil size={10} />
+          </button>
+        )}
+      </div>
+
+      {editing && (
+        <div className="mt-1.5 space-y-1">
+          <input
+            type="text"
+            value={coverDraft}
+            onChange={(e) => onChangeDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onSave();
+              if (e.key === "Escape") onCancelEdit();
+            }}
+            placeholder="https://i.nostr.build/…"
+            className="w-full px-2 py-1 rounded bg-surface text-fg text-[10px]
+                       font-mono outline-none border border-transparent
+                       focus:border-accent/50"
+            spellCheck={false}
+            autoFocus
+          />
+          <div className="flex gap-1 text-[10px]">
+            <button
+              onClick={onSave}
+              disabled={coverSaving}
+              className="px-2 py-1 rounded bg-accent text-bg font-semibold
+                         hover:opacity-90 disabled:opacity-50 flex-1"
+            >
+              save
+            </button>
+            <button
+              onClick={onCancelEdit}
+              disabled={coverSaving}
+              className="px-2 py-1 rounded bg-surface hover:bg-surfaceHover
+                         text-fg disabled:opacity-50"
+            >
+              cancel
+            </button>
+            {hasUrl && (
+              <button
+                onClick={onClear}
+                disabled={coverSaving}
+                className="px-2 py-1 rounded bg-surface hover:bg-surfaceHover
+                           text-muted hover:text-alert disabled:opacity-50"
+              >
+                clear
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NaddrRow({ naddr }: { naddr: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(naddr);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function viewOnNostrBand() {
+    try {
+      await openUrl(`https://nostr.band/${naddr}`);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-muted mb-1">
+        share link · NIP-19 naddr
+      </div>
+      <div className="flex items-center gap-2">
+        <code
+          className="flex-1 px-2 py-1.5 rounded bg-surface text-fg/80
+                     text-[10px] font-mono break-all"
+          title={naddr}
+        >
+          {naddr}
+        </code>
+        <button
+          onClick={copy}
+          className="px-2 py-1.5 rounded bg-surface hover:bg-surfaceHover
+                     text-fg flex items-center gap-1 text-[10px]"
+          title="Copy naddr to clipboard"
+        >
+          {copied ? <Check size={11} /> : <Copy size={11} />}
+        </button>
+        <button
+          onClick={viewOnNostrBand}
+          className="px-2 py-1.5 rounded bg-surface hover:bg-surfaceHover
+                     text-fg flex items-center gap-1 text-[10px]"
+          title="View on nostr.band"
+        >
+          <ExternalLink size={11} />
+        </button>
+      </div>
+    </div>
   );
 }

@@ -15,6 +15,7 @@ export interface Release {
   source?: string | null;
   filePath?: string | null;
   coverArtPath?: string | null;
+  coverArtUrl?: string | null;
   discogsId?: number | null;
   musicbrainzId?: string | null;
   addedAt?: number | null;
@@ -30,8 +31,38 @@ export interface Stats {
   yearMax: number | null;
 }
 
+export interface ImportSummary {
+  scanned: number;
+  imported: number;
+  skipped: number;
+  errors: string[];
+}
+
+export interface ScanReport {
+  totalDirs: number;
+  totalFiles: number;
+  totalBytes: number;
+}
+
+export interface ScanDiscogsReport {
+  totalRows: number;
+  physical: number;
+  digital: number;
+  withCondition: number;
+}
+
+export interface ImportProgress {
+  current: number;
+  total: number;
+  currentDir: string;
+}
+
 export async function initDb(): Promise<string> {
   return invoke<string>("init_db");
+}
+
+export async function setDbPath(path: string): Promise<string> {
+  return invoke<string>("set_db_path", { path });
 }
 
 export async function addRelease(release: Release): Promise<number> {
@@ -41,14 +72,136 @@ export async function addRelease(release: Release): Promise<number> {
 export async function listReleases(
   query?: string,
   medium?: "physical" | "digital",
+  needsCover?: boolean,
 ): Promise<Release[]> {
-  return invoke<Release[]>("list_releases", { query, medium });
+  return invoke<Release[]>("list_releases", { query, medium, needsCover });
 }
 
 export async function deleteRelease(id: number): Promise<void> {
   return invoke("delete_release", { id });
 }
 
+export async function setCoverArtUrl(
+  releaseId: number,
+  url: string | null,
+): Promise<void> {
+  return invoke("set_cover_art_url", { releaseId, url });
+}
+
 export async function getStats(): Promise<Stats> {
   return invoke<Stats>("get_stats");
+}
+
+export async function scanDirectory(root: string): Promise<ScanReport> {
+  return invoke<ScanReport>("scan_directory", { root });
+}
+
+export async function importDirectory(root: string): Promise<ImportSummary> {
+  return invoke<ImportSummary>("import_directory", { root });
+}
+
+export async function scanDiscogsCsv(path: string): Promise<ScanDiscogsReport> {
+  return invoke<ScanDiscogsReport>("scan_discogs_csv", { path });
+}
+
+export async function importDiscogsCsv(path: string): Promise<ImportSummary> {
+  return invoke<ImportSummary>("import_discogs_csv", { path });
+}
+
+// --- Embedded cover-art extraction ------------------------------------------
+
+export interface ExtractSummary {
+  scanned: number;
+  extracted: number;
+  noEmbedded: number;
+  noAudio: number;
+  errors: string[];
+}
+
+export async function extractEmbeddedCovers(): Promise<ExtractSummary> {
+  return invoke<ExtractSummary>("extract_embedded_covers");
+}
+
+export interface RescanSummary {
+  scanned: number;
+  matched: number;
+  noMatch: number;
+  noDir: number;
+  errors: string[];
+}
+
+export async function rescanLocalCovers(): Promise<RescanSummary> {
+  return invoke<RescanSummary>("rescan_local_covers");
+}
+
+// --- Nostr identity ----------------------------------------------------------
+
+export interface Keypair {
+  npub: string;
+  nsec: string;
+}
+
+export async function generateKeypair(): Promise<Keypair> {
+  return invoke<Keypair>("generate_keypair");
+}
+
+export async function importKeypair(nsec: string): Promise<string> {
+  return invoke<string>("import_keypair", { nsec });
+}
+
+export async function getNpub(): Promise<string | null> {
+  return invoke<string | null>("get_npub");
+}
+
+export async function clearKeypair(): Promise<void> {
+  return invoke("clear_keypair");
+}
+
+// --- Nostr publish -----------------------------------------------------------
+
+export interface RelayError {
+  relay: string;
+  error: string;
+}
+
+export interface PublishResult {
+  eventId: string;
+  naddr: string;
+  acceptedBy: string[];
+  rejected: RelayError[];
+}
+
+export interface PublishProgress {
+  current: number;
+  total: number;
+  title: string;
+  artist: string;
+  acceptedBy: string[];
+  rejected: RelayError[];
+}
+
+export interface PublishLibrarySummary {
+  total: number;
+  published: number;
+  failed: number;
+}
+
+export async function publishRelease(
+  releaseId: number,
+  relays: string[],
+): Promise<PublishResult> {
+  return invoke<PublishResult>("publish_release", { releaseId, relays });
+}
+
+export async function unpublishRelease(
+  releaseId: number,
+  relays: string[],
+): Promise<PublishResult> {
+  return invoke<PublishResult>("unpublish_release", { releaseId, relays });
+}
+
+export async function publishLibrary(
+  relays: string[],
+): Promise<PublishLibrarySummary> {
+  return invoke<PublishLibrarySummary>("publish_library", { relays });
 }

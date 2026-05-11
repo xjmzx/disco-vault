@@ -1,16 +1,101 @@
-import { useState } from "react";
-import { Radio, Upload } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  AlertTriangle,
+  Copy,
+  KeyRound,
+  Lock,
+  LogOut,
+  Radio,
+  ShieldCheck,
+  Upload,
+} from "lucide-react";
+import { SimplePool, nip19 } from "nostr-tools";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Section } from "./Section";
+import {
+  clearKeypair,
+  generateKeypair,
+  getNpub,
+  importKeypair,
+  publishLibrary,
+  type PublishLibrarySummary,
+  type PublishProgress,
+} from "../lib/tauri";
 
-const DEFAULT_RELAYS = [
-  "wss://relay.damus.io",
-  "wss://nos.lol",
-  "wss://relay.primal.net",
-];
+interface NostrPanelProps {
+  relays: string[];
+  setRelays: (next: string[]) => void;
+}
 
-export function NostrPanel() {
-  const [relays, setRelays] = useState<string[]>(DEFAULT_RELAYS);
+type Phase = "loading" | "loggedOut" | "reveal" | "loggedIn";
+type PublishPhase = "idle" | "confirm" | "running" | "done";
+
+interface ProfileMeta {
+  name?: string;
+  display_name?: string;
+  nip05?: string;
+  picture?: string;
+}
+
+export function NostrPanel({ relays, setRelays }: NostrPanelProps) {
   const [newRelay, setNewRelay] = useState("");
+
+  const [phase, setPhase] = useState<Phase>("loading");
+  const [npub, setNpub] = useState<string | null>(null);
+  const [revealedNsec, setRevealedNsec] = useState<string | null>(null);
+  const [profile, setProfile] = useState<ProfileMeta | null>(null);
+  const [pasteValue, setPasteValue] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const [publishPhase, setPublishPhase] = useState<PublishPhase>("idle");
+  const [publishProgress, setPublishProgress] =
+    useState<PublishProgress | null>(null);
+  const [publishSummary, setPublishSummary] =
+    useState<PublishLibrarySummary | null>(null);
+  const [publishError, setPublishError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getNpub()
+      .then((p) => {
+        if (p) {
+          setNpub(p);
+          setPhase("loggedIn");
+          fetchProfile(p, relays);
+        } else {
+          setPhase("loggedOut");
+        }
+      })
+      .catch((e) => {
+        setError(String(e));
+        setPhase("loggedOut");
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function fetchProfile(npubBech32: string, relayList: string[]) {
+    try {
+      const decoded = nip19.decode(npubBech32);
+      if (decoded.type !== "npub") return;
+      const hex = decoded.data as string;
+      const pool = new SimplePool();
+      const event = await pool.get(relayList, {
+        kinds: [0],
+        authors: [hex],
+      });
+      pool.close(relayList);
+      if (event) {
+        try {
+          const meta = JSON.parse(event.content) as ProfileMeta;
+          setProfile(meta);
+        } catch {
+          /* malformed metadata, ignore */
+        }
+      }
+    } catch {
+      /* best-effort fetch, ignore */
+    }
+  }
 
   function addRelay() {
     const url = newRelay.trim();
@@ -19,65 +104,515 @@ export function NostrPanel() {
     setNewRelay("");
   }
 
+  async function onGenerate() {
+    setError(null);
+    setBusy(true);
+    try {
+      const kp = await generateKeypair();
+      setNpub(kp.npub);
+      setRevealedNsec(kp.nsec);
+      setPhase("reveal");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onImport() {
+    if (!pasteValue.trim()) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const n = await importKeypair(pasteValue.trim());
+      setNpub(n);
+      setPasteValue("");
+      setPhase("loggedIn");
+      fetchProfile(n, relays);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onLogout() {
+    setError(null);
+    try {
+      await clearKeypair();
+      setNpub(null);
+      setRevealedNsec(null);
+      setProfile(null);
+      setPublishPhase("idle");
+      setPublishProgress(null);
+      setPublishSummary(null);
+      setPublishError(null);
+      setPhase("loggedOut");
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function runPublishLibrary() {
+    if (relays.length === 0) {
+      setPublishError("Add at least one relay before publishing.");
+      return;
+    }
+    setPublishError(null);
+    setPublishSummary(null);
+    setPublishProgress({
+      current: 0,
+      total: 0,
+      title: "",
+      artist: "",
+      acceptedBy: [],
+      rejected: [],
+    });
+    setPublishPhase("running");
+
+    const unlisteners: UnlistenFn[] = [];
+    try {
+      unlisteners.push(
+        await listen<number>("publish:started", (e) => {
+          setPublishProgress((p) => ({
+            current: p?.current ?? 0,
+            total: e.payload,
+            title: p?.title ?? "",
+            artist: p?.artist ?? "",
+            acceptedBy: p?.acceptedBy ?? [],
+            rejected: p?.rejected ?? [],
+          }));
+        }),
+      );
+      unlisteners.push(
+        await listen<PublishProgress>("publish:progress", (e) => {
+          setPublishProgress(e.payload);
+        }),
+      );
+
+      const summary = await publishLibrary(relays);
+      setPublishSummary(summary);
+      setPublishPhase("done");
+    } catch (e) {
+      setPublishError(String(e));
+      setPublishPhase("confirm");
+    } finally {
+      unlisteners.forEach((f) => f());
+    }
+  }
+
+  function confirmRevealed() {
+    setRevealedNsec(null);
+    setPhase("loggedIn");
+    if (npub) fetchProfile(npub, relays);
+  }
+
   return (
     <Section title="Sync · Nostr" icon={<Radio size={16} />}>
-      <p className="text-xs text-muted">
-        Publish your collection (or selected lists) to Nostr relays so other
-        clients can subscribe and discover. Subscribe to other users' lists
-        from the same relays.
-      </p>
+      {phase === "loading" && (
+        <div className="text-xs text-muted">checking keychain…</div>
+      )}
 
-      <div className="mt-2">
-        <div className="text-xs text-muted mb-1">Relays</div>
-        <ul className="space-y-1 mb-2">
-          {relays.map((r) => (
-            <li
-              key={r}
-              className="px-2 py-1 rounded bg-bg/50 font-mono text-xs flex
-                         items-center justify-between gap-2"
+      {phase === "loggedOut" && (
+        <>
+          <p className="text-xs text-muted">
+            disco-vault uses a Nostr keypair to sign your published releases.
+            Generate a new identity or paste an existing nsec — your secret
+            key is stored in the OS keychain (libsecret on Linux), never in
+            plain files.
+          </p>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              onClick={onGenerate}
+              disabled={busy}
+              className="px-3 py-2 rounded-md bg-accent text-bg font-semibold
+                         hover:opacity-90 disabled:opacity-50 flex items-center
+                         gap-2 text-xs"
             >
-              <span className="truncate">{r}</span>
+              <KeyRound size={14} /> Generate new identity
+            </button>
+          </div>
+
+          <div className="mt-3">
+            <div className="text-[10px] uppercase tracking-wide text-muted mb-1">
+              or paste existing nsec
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="password"
+                value={pasteValue}
+                onChange={(e) => setPasteValue(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && onImport()}
+                placeholder="nsec1…"
+                className="flex-1 px-3 py-1.5 rounded-md bg-surface text-fg
+                           placeholder:text-muted outline-none border
+                           border-transparent focus:border-accent/50 text-xs
+                           font-mono"
+                spellCheck={false}
+                autoComplete="off"
+              />
               <button
-                onClick={() => setRelays(relays.filter((x) => x !== r))}
-                className="text-muted hover:text-alert text-xs"
-                aria-label={`Remove ${r}`}
+                onClick={onImport}
+                disabled={busy || !pasteValue.trim()}
+                className="px-3 py-1.5 rounded-md bg-surface
+                           hover:bg-surfaceHover text-fg disabled:opacity-50
+                           text-xs"
               >
-                ✕
+                Import
               </button>
-            </li>
-          ))}
-        </ul>
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={newRelay}
-            onChange={(e) => setNewRelay(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && addRelay()}
-            placeholder="wss://relay.example.com"
-            className="flex-1 px-3 py-1.5 rounded-md bg-surface text-fg
-                       placeholder:text-muted outline-none border border-transparent
-                       focus:border-accent/50 text-xs font-mono"
-            spellCheck={false}
+            </div>
+          </div>
+
+          {error && <div className="mt-2 text-alert text-xs">{error}</div>}
+        </>
+      )}
+
+      {phase === "reveal" && revealedNsec && (
+        <>
+          <div className="rounded-md border border-warn/40 bg-warn/10 p-3 text-xs">
+            <div className="flex items-center gap-2 text-warn font-semibold mb-1">
+              <ShieldCheck size={14} /> Save this secret key
+            </div>
+            <p className="text-fg/90">
+              This is the only time the nsec will be shown. Anyone with it
+              can post as you and access this collection. Store it somewhere
+              safe (password manager, paper backup) before continuing.
+            </p>
+          </div>
+
+          <FieldRow label="nsec" value={revealedNsec} mono mask />
+
+          <div className="mt-3 flex justify-end">
+            <button
+              onClick={confirmRevealed}
+              className="px-3 py-1.5 rounded-md bg-accent text-bg
+                         font-semibold hover:opacity-90 text-xs"
+            >
+              I've saved it · continue
+            </button>
+          </div>
+        </>
+      )}
+
+      {phase === "loggedIn" && npub && (
+        <>
+          {profile?.display_name || profile?.name ? (
+            <div className="text-fg font-semibold text-sm">
+              {profile.display_name || profile.name}
+            </div>
+          ) : null}
+
+          {profile?.nip05 && (
+            <div className="text-accent text-xs font-mono mt-0.5">
+              {profile.nip05}
+            </div>
+          )}
+
+          <FieldRow label="npub" value={npub} mono />
+
+          <div className="mt-2 flex items-center gap-1.5 text-[10px] text-muted">
+            <Lock size={11} />
+            <span>
+              secret key stored in OS keychain (
+              <span className="font-mono">{KEYRING_BACKEND}</span>)
+            </span>
+          </div>
+
+          <div className="mt-3">
+            <div className="text-xs text-muted mb-1">Relays</div>
+            <ul className="space-y-1 mb-2">
+              {relays.map((r) => (
+                <li
+                  key={r}
+                  className="px-2 py-1 rounded bg-bg/50 font-mono text-xs flex
+                             items-center justify-between gap-2"
+                >
+                  <span className="truncate">{r}</span>
+                  <button
+                    onClick={() => setRelays(relays.filter((x) => x !== r))}
+                    className="text-muted hover:text-alert text-xs"
+                    aria-label={`Remove ${r}`}
+                  >
+                    ✕
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newRelay}
+                onChange={(e) => setNewRelay(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addRelay()}
+                placeholder="wss://relay.example.com"
+                className="flex-1 px-3 py-1.5 rounded-md bg-surface text-fg
+                           placeholder:text-muted outline-none border
+                           border-transparent focus:border-accent/50 text-xs
+                           font-mono"
+                spellCheck={false}
+              />
+              <button
+                onClick={addRelay}
+                disabled={!newRelay.trim()}
+                className="px-3 py-1.5 rounded-md bg-surface
+                           hover:bg-surfaceHover text-fg disabled:opacity-50
+                           text-xs"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+
+          <PublishLibraryBlock
+            phase={publishPhase}
+            progress={publishProgress}
+            summary={publishSummary}
+            relayCount={relays.length}
+            error={publishError}
+            onAskConfirm={() => {
+              setPublishError(null);
+              setPublishPhase("confirm");
+            }}
+            onCancel={() => setPublishPhase("idle")}
+            onConfirm={runPublishLibrary}
+            onAcknowledgeDone={() => {
+              setPublishPhase("idle");
+              setPublishProgress(null);
+              setPublishSummary(null);
+            }}
           />
+
+          <div className="mt-3 flex justify-end">
+            <button
+              onClick={onLogout}
+              className="px-3 py-1.5 rounded-md bg-surface
+                         hover:bg-surfaceHover text-muted hover:text-alert
+                         flex items-center gap-1.5 text-xs"
+            >
+              <LogOut size={12} /> Forget identity
+            </button>
+          </div>
+
+          {error && <div className="mt-2 text-alert text-xs">{error}</div>}
+        </>
+      )}
+    </Section>
+  );
+}
+
+const KEYRING_BACKEND = "libsecret";
+
+interface PublishLibraryBlockProps {
+  phase: PublishPhase;
+  progress: PublishProgress | null;
+  summary: PublishLibrarySummary | null;
+  relayCount: number;
+  error: string | null;
+  onAskConfirm: () => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+  onAcknowledgeDone: () => void;
+}
+
+function PublishLibraryBlock({
+  phase,
+  progress,
+  summary,
+  relayCount,
+  error,
+  onAskConfirm,
+  onCancel,
+  onConfirm,
+  onAcknowledgeDone,
+}: PublishLibraryBlockProps) {
+  if (phase === "idle") {
+    return (
+      <>
+        <button
+          onClick={onAskConfirm}
+          disabled={relayCount === 0}
+          className="mt-3 w-full px-3 py-2.5 rounded-md bg-accent text-bg
+                     font-semibold hover:opacity-90 disabled:opacity-50
+                     disabled:cursor-not-allowed flex items-center
+                     justify-center gap-2"
+        >
+          <Upload size={16} /> Publish library
+        </button>
+        {error && <div className="mt-2 text-alert text-xs">{error}</div>}
+      </>
+    );
+  }
+
+  if (phase === "confirm") {
+    return (
+      <div className="mt-3 rounded-md border border-warn/40 bg-warn/10 p-3">
+        <div className="flex items-center gap-2 text-warn font-semibold text-xs">
+          <AlertTriangle size={14} /> Publishing is public and permanent
+        </div>
+        <p className="mt-1 text-xs text-fg/90">
+          Each release in your library will be signed and broadcast to{" "}
+          <span className="font-mono text-accent">{relayCount}</span>{" "}
+          {relayCount === 1 ? "relay" : "relays"} as a kind:31237 event.
+          Relays cache and indexers archive — once out there, the data is
+          effectively forever.
+        </p>
+        <div className="mt-2 flex justify-end gap-2 text-xs">
           <button
-            onClick={addRelay}
-            disabled={!newRelay.trim()}
+            onClick={onCancel}
             className="px-3 py-1.5 rounded-md bg-surface hover:bg-surfaceHover
-                       text-fg disabled:opacity-50 text-xs"
+                       text-fg"
           >
-            Add
+            cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            className="px-3 py-1.5 rounded-md bg-accent text-bg font-semibold
+                       hover:opacity-90 flex items-center gap-1.5"
+          >
+            <Upload size={12} /> Yes, publish all
           </button>
         </div>
       </div>
+    );
+  }
 
-      <button
-        className="mt-3 w-full px-3 py-2.5 rounded-md bg-accent text-bg font-semibold
-                   hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed
-                   flex items-center justify-center gap-2"
-        disabled
-      >
-        <Upload size={16} /> Publish library (not wired yet)
-      </button>
-    </Section>
+  if (phase === "running" && progress) {
+    const total = progress.total || 0;
+    const ratio = total > 0 ? Math.min(1, progress.current / total) : 0;
+    return (
+      <div className="mt-3">
+        <div className="text-xs text-muted">
+          publishing {progress.current.toLocaleString()} /{" "}
+          {total.toLocaleString()}
+        </div>
+        <div className="mt-1 h-2 rounded-full bg-surface overflow-hidden">
+          <div
+            className="h-full bg-accent transition-[width] duration-150"
+            style={{ width: `${ratio * 100}%` }}
+          />
+        </div>
+        <div className="mt-1 text-[10px] font-mono text-fg/70 truncate">
+          {progress.artist && progress.title
+            ? `${progress.artist} — ${progress.title}`
+            : "…"}
+        </div>
+        {progress.rejected.length > 0 && (
+          <div className="mt-1 text-[10px] text-alert/80 truncate">
+            last error: {progress.rejected[0].relay} —{" "}
+            {progress.rejected[0].error}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (phase === "done" && summary) {
+    return (
+      <div className="mt-3">
+        <div className="grid grid-cols-3 gap-2 text-xs">
+          <Tile label="total" value={summary.total} />
+          <Tile label="published" value={summary.published} tone="ok" />
+          <Tile label="failed" value={summary.failed} tone="alert" />
+        </div>
+        <div className="mt-2 flex justify-end">
+          <button
+            onClick={onAcknowledgeDone}
+            className="px-3 py-1.5 rounded-md bg-surface hover:bg-surfaceHover
+                       text-fg text-xs"
+          >
+            ok
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function Tile({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone?: "ok" | "alert";
+}) {
+  const valueCls =
+    tone === "ok" ? "text-ok" : tone === "alert" ? "text-alert" : "text-fg";
+  return (
+    <div className="rounded-md bg-surface/50 px-2 py-1.5">
+      <div className="text-[10px] uppercase tracking-wide text-muted">
+        {label}
+      </div>
+      <div className={`font-mono text-sm ${valueCls}`}>
+        {value.toLocaleString()}
+      </div>
+    </div>
+  );
+}
+
+function FieldRow({
+  label,
+  value,
+  mono,
+  mask,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  mask?: boolean;
+}) {
+  const [shown, setShown] = useState(!mask);
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const display = !shown
+    ? value.slice(0, 8) + "…" + value.slice(-4)
+    : value;
+
+  return (
+    <div className="mt-2">
+      <div className="text-[10px] uppercase tracking-wide text-muted mb-0.5">
+        {label}
+      </div>
+      <div className="flex items-center gap-2">
+        <div
+          className={`flex-1 px-2 py-1.5 rounded-md bg-surface text-xs break-all ${
+            mono ? "font-mono" : ""
+          }`}
+        >
+          {display}
+        </div>
+        {mask && (
+          <button
+            onClick={() => setShown((v) => !v)}
+            className="px-2 py-1.5 rounded-md bg-surface hover:bg-surfaceHover
+                       text-muted text-[10px]"
+          >
+            {shown ? "hide" : "show"}
+          </button>
+        )}
+        <button
+          onClick={copy}
+          className="px-2 py-1.5 rounded-md bg-surface hover:bg-surfaceHover
+                     text-fg text-xs flex items-center gap-1"
+          title="Copy to clipboard"
+        >
+          <Copy size={11} /> {copied ? "✓" : ""}
+        </button>
+      </div>
+    </div>
   );
 }

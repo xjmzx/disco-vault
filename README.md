@@ -139,6 +139,55 @@ disco-vault/
 └── Makefile                          # deps / dev / build / install / uninstall
 ```
 
+## Nostr schema (experimental — `kind:31237`)
+
+There is no standardised NIP for personal music collections, so disco-vault
+defines its own event schema. It uses **parameterized replaceable events**
+(NIP-01 range `30000–39999`) so each release is addressable and updatable in
+place.
+
+- **Kind:** `31237` (experimental, not formally registered).
+- **Identity:** ed25519 keypair, secret key stored in the OS keychain
+  (libsecret on Linux). Public key advertised as bech32 `npub`; optional
+  human-readable handle via NIP-05 picked up from the user's `kind:0`
+  metadata when present.
+- **Address form:** `kind:31237:<pubkey>:<d>` — share via NIP-19 `naddr1…`.
+
+### Tag schema
+
+| Tag             | Required | Notes                                            |
+| --------------- | -------- | ------------------------------------------------ |
+| `d`             | yes      | Stable per-release identifier (any unique string) |
+| `title`         | yes      | Album / release title                             |
+| `artist`        | yes      | Primary artist (album-level)                      |
+| `medium`        | yes      | `"physical"` or `"digital"`                       |
+| `format`        | no       | `LP`, `CD`, `FLAC 24/96`, `MP3 320`, …            |
+| `year`          | no       | 4-digit `YYYY`                                    |
+| `label`         | no       | Record label                                      |
+| `catalog`       | no       | Catalog number                                    |
+| `country`       | no       | ISO 2-letter or free text                         |
+| `condition`     | no       | Physical-only: `M`, `NM`, `VG+`, …                |
+| `i`             | repeat   | NIP-73 external IDs, e.g. `discogs:release:12345`, `musicbrainz:release:<uuid>` |
+| `t`             | repeat   | Hashtag / genre                                   |
+| `image`         | no       | Cover art URL — square image, served by nostr.build, Blossom, or any HTTPS host (relays do not store binaries) |
+
+`content` carries free-form notes (personal annotations, source).
+
+### Relays
+
+- **NIP-65** (`kind:10002`): the user's read/write relay list. Subscribers
+  use this to find where to fetch.
+- **NIP-09** (`kind:5`): deletion request when a release is removed locally.
+- **NIP-51** (`kind:30005`, optional): a "music collection" set indexing all
+  the user's release events as `a`-tag refs — cheap manifest for
+  enumerating someone's library.
+
+### Privacy note
+
+Publishing is public, permanent, and indexable. Anyone listing your owned
+music is making a personal disclosure. The current scaffold does **not**
+publish anything — only the local keypair is stored.
+
 ## Companion apps in the suite
 
 - [`bpm-tapper`](https://github.com/xjmzx/bpm-tapper)

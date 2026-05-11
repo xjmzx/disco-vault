@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { Plus, Save } from "lucide-react";
+import { ChevronDown, Plus, Save } from "lucide-react";
 import { Section } from "./Section";
 import { addRelease, type Release } from "../lib/tauri";
 
@@ -19,6 +19,7 @@ const EMPTY: Release = {
   condition: "",
   notes: "",
   source: "",
+  coverArtUrl: "",
 };
 
 export function AddReleaseForm({ onAdded }: Props) {
@@ -93,6 +94,11 @@ export function AddReleaseForm({ onAdded }: Props) {
         <Field label="source URL" value={release.source ?? ""}
                onChange={(v) => set("source", v)} />
 
+        <Field label="cover URL (e.g. nostr.build / Blossom)"
+               value={release.coverArtUrl ?? ""}
+               onChange={(v) => set("coverArtUrl", v)}
+               className="col-span-2" />
+
         <TextArea label="notes" value={release.notes ?? ""}
                   onChange={(v) => set("notes", v)} className="col-span-2" />
 
@@ -165,17 +171,27 @@ function SelectField({
   return (
     <label className="flex flex-col gap-1">
       <span className="text-muted">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className={inputCls()}
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
+      <div className="relative">
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="appearance-none w-full pl-2.5 pr-7 py-1.5 rounded-md
+                     bg-accent text-bg font-semibold outline-none
+                     border border-transparent focus:border-fg/30 cursor-pointer"
+        >
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <ChevronDown
+          size={12}
+          strokeWidth={2.5}
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-bg
+                     pointer-events-none"
+        />
+      </div>
     </label>
   );
 }
