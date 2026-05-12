@@ -1,9 +1,11 @@
-import { useState } from "react";
-import { Disc, FolderInput, Play, RotateCcw } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Disc, FolderInput, Library, Play, RotateCcw } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Section } from "./Section";
+import { DB_BUTTON_CLS } from "../lib/buttonStyles";
 import {
+  getStats,
   importDirectory,
   importDiscogsCsv,
   scanDirectory,
@@ -12,9 +14,11 @@ import {
   type ImportSummary,
   type ScanDiscogsReport,
   type ScanReport,
+  type Stats,
 } from "../lib/tauri";
 
 interface Props {
+  reloadKey: number;
   onImported: () => void;
 }
 
@@ -24,7 +28,16 @@ type ScanResult =
   | { kind: "folder"; report: ScanReport }
   | { kind: "discogs"; report: ScanDiscogsReport };
 
-export function ImportPanel({ onImported }: Props) {
+export function LibraryPanel({ reloadKey, onImported }: Props) {
+  // --- Stats ----------------------------------------------------------------
+  const [stats, setStats] = useState<Stats | null>(null);
+  useEffect(() => {
+    getStats()
+      .then(setStats)
+      .catch(() => setStats(null));
+  }, [reloadKey]);
+
+  // --- Import ---------------------------------------------------------------
   const [phase, setPhase] = useState<Phase>("idle");
   const [pickedPath, setPickedPath] = useState<string | null>(null);
   const [scan, setScan] = useState<ScanResult | null>(null);
@@ -56,7 +69,6 @@ export function ImportPanel({ onImported }: Props) {
       return;
     }
     if (!picked) return;
-
     setPickedPath(picked);
     setLast(null);
     setProgress(null);
@@ -86,7 +98,6 @@ export function ImportPanel({ onImported }: Props) {
       return;
     }
     if (!picked) return;
-
     setPickedPath(picked);
     setLast(null);
     setProgress(null);
@@ -143,27 +154,37 @@ export function ImportPanel({ onImported }: Props) {
     }
   }
 
+  // --- Render ---------------------------------------------------------------
+  const inlineStats = stats ? (
+    <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm items-center">
+      <StatBadge label="Total" value={String(stats.total)} />
+      <StatBadge label="Physical" value={String(stats.physical)} />
+      <StatBadge label="Digital" value={String(stats.digital)} />
+      <StatBadge label="Artists" value={String(stats.uniqueArtists)} />
+    </div>
+  ) : (
+    <span className="text-sm text-muted">no data yet</span>
+  );
+
   return (
-    <Section title="Import library" icon={<FolderInput size={16} />}>
+    <Section
+      title="Library"
+      icon={<Library size={16} />}
+      right={inlineStats}
+    >
       {phase === "idle" && (
         <>
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={pickFolder}
-              className="px-3 py-2 rounded-md bg-accent text-bg font-semibold
-                         hover:opacity-90 flex items-center gap-2 text-xs"
-            >
-              <FolderInput size={14} /> Folder (digital)
+          <div className="flex flex-wrap justify-end gap-2">
+            <button onClick={pickFolder} className={DB_BUTTON_CLS}>
+              <FolderInput size={14} /> Import Local
             </button>
-            <button
-              onClick={pickDiscogsCsv}
-              className="px-3 py-2 rounded-md bg-accent text-bg font-semibold
-                         hover:opacity-90 flex items-center gap-2 text-xs"
-            >
-              <Disc size={14} /> Discogs CSV (physical)
+            <button onClick={pickDiscogsCsv} className={DB_BUTTON_CLS}>
+              <Disc size={14} /> Import Discogs
             </button>
           </div>
-          {error && <div className="mt-2 text-alert text-xs">{error}</div>}
+          {error && (
+            <div className="mt-1 text-alert text-xs text-right">{error}</div>
+          )}
         </>
       )}
 
@@ -180,28 +201,16 @@ export function ImportPanel({ onImported }: Props) {
           </div>
           {scan.kind === "folder" ? (
             <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-              <Stat label="folders" value={scan.report.totalDirs.toLocaleString()} />
-              <Stat label="files" value={scan.report.totalFiles.toLocaleString()} />
-              <Stat label="size" value={formatBytes(scan.report.totalBytes)} />
+              <ScanStat label="folders" value={scan.report.totalDirs.toLocaleString()} />
+              <ScanStat label="files" value={scan.report.totalFiles.toLocaleString()} />
+              <ScanStat label="size" value={formatBytes(scan.report.totalBytes)} />
             </div>
           ) : (
             <div className="mt-2 grid grid-cols-4 gap-2 text-xs">
-              <Stat label="rows" value={scan.report.totalRows.toLocaleString()} />
-              <Stat
-                label="physical"
-                value={scan.report.physical.toLocaleString()}
-                tone="ok"
-              />
-              <Stat
-                label="digital"
-                value={scan.report.digital.toLocaleString()}
-                tone="ok"
-              />
-              <Stat
-                label="w/ cond"
-                value={scan.report.withCondition.toLocaleString()}
-                tone="muted"
-              />
+              <ScanStat label="rows" value={scan.report.totalRows.toLocaleString()} />
+              <ScanStat label="physical" value={scan.report.physical.toLocaleString()} tone="ok" />
+              <ScanStat label="digital" value={scan.report.digital.toLocaleString()} tone="ok" />
+              <ScanStat label="w/ cond" value={scan.report.withCondition.toLocaleString()} tone="muted" />
             </div>
           )}
           <div className="mt-3 flex gap-2">
@@ -256,17 +265,9 @@ export function ImportPanel({ onImported }: Props) {
             {pickedPath}
           </div>
           <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-            <Stat label="scanned" value={last.scanned.toLocaleString()} />
-            <Stat
-              label="imported"
-              value={last.imported.toLocaleString()}
-              tone="ok"
-            />
-            <Stat
-              label="skipped"
-              value={last.skipped.toLocaleString()}
-              tone="muted"
-            />
+            <ScanStat label="scanned" value={last.scanned.toLocaleString()} />
+            <ScanStat label="imported" value={last.imported.toLocaleString()} tone="ok" />
+            <ScanStat label="skipped" value={last.skipped.toLocaleString()} tone="muted" />
           </div>
           {last.errors.length > 0 && (
             <details className="mt-2">
@@ -297,6 +298,15 @@ export function ImportPanel({ onImported }: Props) {
   );
 }
 
+function StatBadge({ label, value }: { label: string; value: string }) {
+  return (
+    <span>
+      <span className="text-muted">{label} </span>
+      <span className="text-accent font-mono">{value}</span>
+    </span>
+  );
+}
+
 function ProgressBar({ current, total }: { current: number; total: number }) {
   const ratio = total > 0 ? Math.min(1, current / total) : 0;
   return (
@@ -309,7 +319,7 @@ function ProgressBar({ current, total }: { current: number; total: number }) {
   );
 }
 
-function Stat({
+function ScanStat({
   label,
   value,
   tone,

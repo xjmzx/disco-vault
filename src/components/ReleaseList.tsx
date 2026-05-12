@@ -206,7 +206,7 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
 
   return (
     <Section
-      title="Library"
+      title="Releases"
       icon={<Disc3 size={16} />}
       right={
         <span className="text-xs text-muted">
@@ -410,7 +410,8 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
       )}
 
       <ul className="mt-1 flex-1 overflow-auto rounded-md
-                     divide-y divide-surface/60 bg-bg/50 max-h-[60vh]">
+                     divide-y divide-surface/60 bg-bg/50 max-h-[70vh]
+                     [scrollbar-gutter:stable]">
         {items.length === 0 && !loading && !error && (
           <li className="px-3 py-3 text-muted text-xs">
             {needsCoverOnly

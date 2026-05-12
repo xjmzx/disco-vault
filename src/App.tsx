@@ -7,9 +7,8 @@ import {
 import { ReleaseList } from "./components/ReleaseList";
 import { ReleaseDetail } from "./components/ReleaseDetail";
 import { AddReleaseForm } from "./components/AddReleaseForm";
-import { StatsPanel } from "./components/StatsPanel";
+import { LibraryPanel } from "./components/LibraryPanel";
 import { NostrPanel } from "./components/NostrPanel";
-import { ImportPanel } from "./components/ImportPanel";
 import {
   initDb,
   setDbPath as setDbPathCmd,
@@ -165,17 +164,16 @@ export default function App() {
         </div>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-4">
-        <div className="grid grid-cols-1 gap-4 content-start">
-          <StatsPanel reloadKey={reloadKey} />
-          <ImportPanel onImported={reload} />
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] gap-2">
+        <div className="grid grid-cols-1 gap-2 content-start">
+          <LibraryPanel reloadKey={reloadKey} onImported={reload} />
           <ReleaseList
             reloadKey={reloadKey}
             selected={selected}
             onSelect={setSelected}
           />
         </div>
-        <div className="grid grid-cols-1 gap-4 content-start">
+        <div className="grid grid-cols-1 gap-2 content-start">
           {selected ? (
             <ReleaseDetail
               release={selected}

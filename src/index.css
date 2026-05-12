@@ -19,3 +19,20 @@ body {
 ::selection {
   @apply bg-surfaceHover text-fg;
 }
+
+/* Custom scrollbar — dark, slightly wider than the WebKit default, easier
+   to grab. Applies globally to anything in the app that scrolls. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #45475a; /* surfaceHover */
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #6c7086; /* muted */
+}
