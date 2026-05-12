@@ -297,19 +297,7 @@ export function NostrPanel({ relays, setRelays }: NostrPanelProps) {
 
       {phase === "loggedIn" && npub && (
         <>
-          {profile?.display_name || profile?.name ? (
-            <div className="text-fg font-semibold text-sm">
-              {profile.display_name || profile.name}
-            </div>
-          ) : null}
-
-          {profile?.nip05 && (
-            <div className="text-accent text-xs font-mono mt-0.5">
-              {profile.nip05}
-            </div>
-          )}
-
-          <FieldRow label="npub" value={npub} mono />
+          <IdentityRow profile={profile} npub={npub} />
 
           <div className="mt-2 flex items-center gap-1.5 text-[10px] text-muted">
             <Lock size={11} />
@@ -402,6 +390,39 @@ export function NostrPanel({ relays, setRelays }: NostrPanelProps) {
 }
 
 const KEYRING_BACKEND = "libsecret";
+
+function IdentityRow({
+  profile,
+  npub,
+}: {
+  profile: ProfileMeta | null;
+  npub: string;
+}) {
+  const name = profile?.display_name || profile?.name;
+  const nip05 = profile?.nip05;
+
+  if (name && nip05) {
+    return (
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <span className="text-fg font-semibold text-sm">{name}</span>
+        <span className="text-accent text-xs font-mono">{nip05}</span>
+      </div>
+    );
+  }
+  if (name) {
+    return <div className="text-fg font-semibold text-sm">{name}</div>;
+  }
+  if (nip05) {
+    return <div className="text-accent text-xs font-mono">{nip05}</div>;
+  }
+  // Brand-new keypair with no published kind:0 yet — at least show a short
+  // form of the npub so the user has SOMETHING to confirm they're logged in.
+  return (
+    <div className="text-muted text-xs font-mono">
+      {npub.slice(0, 12)}…{npub.slice(-6)}
+    </div>
+  );
+}
 
 interface PublishLibraryBlockProps {
   phase: PublishPhase;
