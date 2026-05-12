@@ -56,17 +56,22 @@ export function AddReleaseForm({ onAdded }: Props) {
 
   return (
     <Section title="Add release" icon={<Plus size={16} />}>
-      <form
-        onSubmit={onSubmit}
-        className="grid grid-cols-2 gap-3 text-xs"
-      >
-        <Field label="artist *" value={release.artist}
-               onChange={(v) => set("artist", v)} className="col-span-2" />
-        <Field label="title *" value={release.title}
-               onChange={(v) => set("title", v)} className="col-span-2" />
-
-        <NumField label="year" value={release.year ?? null}
-                  onChange={(v) => set("year", v)} />
+      <form onSubmit={onSubmit} className="text-xs space-y-1.5">
+        <Field
+          label="artist"
+          value={release.artist}
+          onChange={(v) => set("artist", v)}
+        />
+        <Field
+          label="title"
+          value={release.title}
+          onChange={(v) => set("title", v)}
+        />
+        <NumField
+          label="year"
+          value={release.year ?? null}
+          onChange={(v) => set("year", v)}
+        />
         <SelectField
           label="medium"
           value={release.medium ?? ""}
@@ -77,40 +82,54 @@ export function AddReleaseForm({ onAdded }: Props) {
             { value: "digital", label: "digital" },
           ]}
         />
+        <Field
+          label="format"
+          value={release.format ?? ""}
+          onChange={(v) => set("format", v)}
+        />
+        <Field
+          label="condition"
+          value={release.condition ?? ""}
+          onChange={(v) => set("condition", v)}
+        />
+        <Field
+          label="label"
+          value={release.label ?? ""}
+          onChange={(v) => set("label", v)}
+        />
+        <Field
+          label="catalog"
+          value={release.catalogNumber ?? ""}
+          onChange={(v) => set("catalogNumber", v)}
+        />
+        <Field
+          label="country"
+          value={release.country ?? ""}
+          onChange={(v) => set("country", v)}
+        />
+        <Field
+          label="url"
+          value={release.source ?? ""}
+          onChange={(v) => set("source", v)}
+        />
+        <Field
+          label="cover url"
+          value={release.coverArtUrl ?? ""}
+          onChange={(v) => set("coverArtUrl", v)}
+        />
+        <TextArea
+          label="notes"
+          value={release.notes ?? ""}
+          onChange={(v) => set("notes", v)}
+        />
 
-        <Field label="format (LP, CD, FLAC, …)" value={release.format ?? ""}
-               onChange={(v) => set("format", v)} />
-        <Field label="condition (M, NM, VG+, …)"
-               value={release.condition ?? ""}
-               onChange={(v) => set("condition", v)} />
+        {error && <div className="text-alert text-xs pl-[6rem]">{error}</div>}
 
-        <Field label="label" value={release.label ?? ""}
-               onChange={(v) => set("label", v)} />
-        <Field label="catalog #" value={release.catalogNumber ?? ""}
-               onChange={(v) => set("catalogNumber", v)} />
-
-        <Field label="country" value={release.country ?? ""}
-               onChange={(v) => set("country", v)} />
-        <Field label="source URL" value={release.source ?? ""}
-               onChange={(v) => set("source", v)} />
-
-        <Field label="cover URL (e.g. nostr.build / Blossom)"
-               value={release.coverArtUrl ?? ""}
-               onChange={(v) => set("coverArtUrl", v)}
-               className="col-span-2" />
-
-        <TextArea label="notes" value={release.notes ?? ""}
-                  onChange={(v) => set("notes", v)} className="col-span-2" />
-
-        {error && (
-          <div className="col-span-2 text-alert text-xs">{error}</div>
-        )}
-
-        <div className="col-span-2 flex justify-end">
+        <div className="flex justify-end pt-1">
           <button
             type="submit"
             disabled={saving}
-            className="px-4 py-2 rounded-md bg-accent text-bg font-semibold
+            className="px-4 py-1.5 rounded-md bg-accent text-bg font-semibold
                        hover:opacity-90 disabled:opacity-50
                        flex items-center gap-1.5"
           >
@@ -122,22 +141,28 @@ export function AddReleaseForm({ onAdded }: Props) {
   );
 }
 
-function inputCls() {
-  return "px-2 py-1.5 rounded-md bg-surface text-fg outline-none " +
-         "border border-transparent focus:border-accent/50 placeholder:text-muted";
-}
+const ROW = "grid grid-cols-[5.5rem_1fr] gap-x-3 items-center";
+const INPUT_CLS =
+  "px-2 py-1 rounded-md bg-surface text-fg outline-none " +
+  "border border-transparent focus:border-accent/50 placeholder:text-muted";
 
 function Field({
-  label, value, onChange, className,
-}: { label: string; value: string; onChange: (v: string) => void; className?: string }) {
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
   return (
-    <label className={"flex flex-col gap-1 " + (className ?? "")}>
-      <span className="text-muted">{label}</span>
+    <label className={ROW}>
+      <span className="text-muted text-right">{label}</span>
       <input
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className={inputCls()}
+        className={INPUT_CLS}
         spellCheck={false}
       />
     </label>
@@ -145,23 +170,34 @@ function Field({
 }
 
 function NumField({
-  label, value, onChange,
-}: { label: string; value: number | null; onChange: (v: number | null) => void }) {
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number | null;
+  onChange: (v: number | null) => void;
+}) {
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-muted">{label}</span>
+    <label className={ROW}>
+      <span className="text-muted text-right">{label}</span>
       <input
         type="number"
         value={value ?? ""}
-        onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)}
-        className={inputCls()}
+        onChange={(e) =>
+          onChange(e.target.value ? Number(e.target.value) : null)
+        }
+        className={`${INPUT_CLS} w-24`}
       />
     </label>
   );
 }
 
 function SelectField({
-  label, value, onChange, options,
+  label,
+  value,
+  onChange,
+  options,
 }: {
   label: string;
   value: string;
@@ -169,13 +205,13 @@ function SelectField({
   options: { value: string; label: string }[];
 }) {
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-muted">{label}</span>
-      <div className="relative">
+    <label className={ROW}>
+      <span className="text-muted text-right">{label}</span>
+      <div className="relative w-fit">
         <select
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="appearance-none w-full pl-2.5 pr-7 py-1.5 rounded-md
+          className="appearance-none pl-2.5 pr-7 py-1 rounded-md
                      bg-accent text-bg font-semibold outline-none
                      border border-transparent focus:border-fg/30 cursor-pointer"
         >
@@ -197,16 +233,22 @@ function SelectField({
 }
 
 function TextArea({
-  label, value, onChange, className,
-}: { label: string; value: string; onChange: (v: string) => void; className?: string }) {
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
   return (
-    <label className={"flex flex-col gap-1 " + (className ?? "")}>
-      <span className="text-muted">{label}</span>
+    <label className="grid grid-cols-[5.5rem_1fr] gap-x-3 items-start">
+      <span className="text-muted text-right pt-1">{label}</span>
       <textarea
-        rows={3}
+        rows={2}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className={inputCls() + " resize-none"}
+        className={`${INPUT_CLS} resize-none`}
       />
     </label>
   );
