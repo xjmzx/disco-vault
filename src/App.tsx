@@ -4,7 +4,7 @@ import {
   open as openDialog,
   save as saveDialog,
 } from "@tauri-apps/plugin-dialog";
-import { ReleaseList } from "./components/ReleaseList";
+import { ReleaseList, type FilterContext } from "./components/ReleaseList";
 import { ReleaseDetail } from "./components/ReleaseDetail";
 import { AddReleaseForm } from "./components/AddReleaseForm";
 import { LibraryPanel } from "./components/LibraryPanel";
@@ -58,6 +58,13 @@ export default function App() {
       }
     }
     return DEFAULT_RELAYS;
+  });
+
+  const [filterContext, setFilterContext] = useState<FilterContext>({
+    query: "",
+    medium: null,
+    needsCoverOnly: false,
+    count: 0,
   });
 
   useEffect(() => {
@@ -171,6 +178,7 @@ export default function App() {
             reloadKey={reloadKey}
             selected={selected}
             onSelect={setSelected}
+            onFilterChange={setFilterContext}
           />
         </div>
         <div className="grid grid-cols-1 gap-2 content-start">
@@ -184,7 +192,11 @@ export default function App() {
           ) : (
             <AddReleaseForm onAdded={reload} />
           )}
-          <NostrPanel relays={relays} setRelays={setRelays} />
+          <NostrPanel
+            relays={relays}
+            setRelays={setRelays}
+            filterContext={filterContext}
+          />
         </div>
       </div>
 

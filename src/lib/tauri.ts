@@ -145,6 +145,35 @@ export async function refreshRelease(releaseId: number): Promise<RefreshResult> 
   return invoke<RefreshResult>("refresh_release", { releaseId });
 }
 
+export async function updateReleasePath(
+  releaseId: number,
+  newPath: string,
+): Promise<RefreshResult> {
+  return invoke<RefreshResult>("update_release_path", { releaseId, newPath });
+}
+
+export interface OrphanInfo {
+  id: number;
+  artist: string;
+  title: string;
+  filePath: string;
+}
+
+export interface LibraryScanSummary {
+  scanned: number;
+  refreshed: number;
+  noChanges: number;
+  orphaned: number;
+  noAudio: number;
+  noPath: number;
+  orphans: OrphanInfo[];
+  errors: string[];
+}
+
+export async function scanLibraryChanges(): Promise<LibraryScanSummary> {
+  return invoke<LibraryScanSummary>("scan_library_changes");
+}
+
 export interface CoverSyncResult {
   status: string;
   written: string | null;
@@ -225,6 +254,16 @@ export async function unpublishRelease(
 
 export async function publishLibrary(
   relays: string[],
+  filter?: {
+    query?: string;
+    medium?: "physical" | "digital";
+    needsCover?: boolean;
+  },
 ): Promise<PublishLibrarySummary> {
-  return invoke<PublishLibrarySummary>("publish_library", { relays });
+  return invoke<PublishLibrarySummary>("publish_library", {
+    relays,
+    query: filter?.query,
+    medium: filter?.medium,
+    needsCover: filter?.needsCover,
+  });
 }

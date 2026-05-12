@@ -13,6 +13,7 @@ import {
   Upload,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { Section } from "./Section";
 import { DB_BUTTON_CLS } from "../lib/buttonStyles";
 import { coverImageSrc } from "../lib/cover";
@@ -91,7 +92,11 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
 
   async function clearCoverUrl() {
     if (!release.id) return;
-    if (!confirm("Clear the cover URL for this release?")) return;
+    const yes = await ask("Clear the cover URL for this release?", {
+      title: "Clear cover URL",
+      kind: "warning",
+    });
+    if (!yes) return;
     setCoverSaving(true);
     setCoverError(null);
     try {
@@ -110,7 +115,26 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
 
   async function onDelete() {
     if (!release.id) return;
-    if (!confirm(`Delete "${release.artist} — ${release.title}"?`)) return;
+    const details = [
+      release.medium && `medium: ${release.medium}`,
+      release.year && `year: ${release.year}`,
+      release.format && `format: ${release.format}`,
+      release.catalogNumber && `catalog: ${release.catalogNumber}`,
+      release.discogsId && `discogs id: ${release.discogsId}`,
+      release.filePath && `file path: ${release.filePath}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const message =
+      `Delete "${release.artist} — ${release.title}"?\n` +
+      (details ? `\n${details}\n` : "") +
+      `\nThis removes the database row only. Files on disk are not touched, ` +
+      `and any previously-published Nostr event remains until you Unpublish it.`;
+    const yes = await ask(message, {
+      title: "Delete release",
+      kind: "warning",
+    });
+    if (!yes) return;
     try {
       await deleteRelease(release.id);
       onDeleted();
@@ -182,13 +206,11 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
       setPublishError("Add at least one relay in the Nostr Sync panel.");
       return;
     }
-    if (
-      !confirm(
-        `Send NIP-09 deletion request for "${release.artist} — ${release.title}"?\n\nThis asks every configured relay to remove the published event. Well-behaved relays honour it; some may ignore the request.`,
-      )
-    ) {
-      return;
-    }
+    const yes = await ask(
+      `Send NIP-09 deletion request for "${release.artist} — ${release.title}"?\n\nThis asks every configured relay to remove the published event. Well-behaved relays honour it; some may ignore the request.`,
+      { title: "Unpublish from Nostr", kind: "warning" },
+    );
+    if (!yes) return;
     setUnpublishing(true);
     setPublishError(null);
     setPublishResult(null);

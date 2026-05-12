@@ -5,33 +5,53 @@ import {
   FolderSearch,
   ImageOff,
   RefreshCw,
+  ScanLine,
   Search,
   Wand2,
 } from "lucide-react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { ask, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Section } from "./Section";
 import {
+  deleteRelease,
   extractEmbeddedCovers,
   listReleases,
   rescanLocalCovers,
+  scanLibraryChanges,
   setCoverArtUrl,
+  updateReleasePath,
   type ExtractSummary,
   type ImportProgress,
+  type LibraryScanSummary,
+  type OrphanInfo,
   type Release,
   type RescanSummary,
 } from "../lib/tauri";
 import { coverImageSrc } from "../lib/cover";
 import { cn } from "../lib/cn";
 
+export interface FilterContext {
+  query: string;
+  medium: "physical" | "digital" | null;
+  needsCoverOnly: boolean;
+  count: number;
+}
+
 interface Props {
   reloadKey: number;
   onSelect: (r: Release) => void;
   selected: Release | null;
+  onFilterChange?: (ctx: FilterContext) => void;
 }
 
 type MediumFilter = "" | "physical" | "digital";
 
-export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
+export function ReleaseList({
+  reloadKey,
+  onSelect,
+  selected,
+  onFilterChange,
+}: Props) {
   const [query, setQuery] = useState("");
   const [medium, setMedium] = useState<MediumFilter>("");
   const [needsCoverOnly, setNeedsCoverOnly] = useState(false);
@@ -48,12 +68,13 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
   // Cover-cleanup background ops. Extract reads embedded artwork from audio
   // file tags; rescan walks album directories for a wider set of cover
   // filename patterns.
-  type OpKind = "extract" | "rescan";
+  type OpKind = "extract" | "rescan" | "scan";
   const [activeOp, setActiveOp] = useState<OpKind | null>(null);
   const [opProgress, setOpProgress] = useState<ImportProgress | null>(null);
   const [opSummary, setOpSummary] = useState<
     | { kind: "extract"; data: ExtractSummary }
     | { kind: "rescan"; data: RescanSummary }
+    | { kind: "scan"; data: LibraryScanSummary }
     | null
   >(null);
 
@@ -79,18 +100,40 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
             startEvent: "extract:started",
             progressEvent: "extract:progress",
           }
-        : {
-            prompt:
-              "Re-scan album directories for cover-art image files using " +
-                "broader filename matching (albumart.*, art.*, files named " +
-                "after the album, etc.)?\n\n" +
-                "Only releases that still have no cover will be touched — " +
-                "no existing data is overwritten.",
-            startEvent: "rescan:started",
-            progressEvent: "rescan:progress",
-          };
+        : kind === "rescan"
+          ? {
+              prompt:
+                "Re-scan album directories for cover-art image files using " +
+                  "broader filename matching (albumart.*, art.*, files named " +
+                  "after the album, etc.)?\n\n" +
+                  "Only releases that still have no cover will be touched — " +
+                  "no existing data is overwritten.",
+              startEvent: "rescan:started",
+              progressEvent: "rescan:progress",
+            }
+          : {
+              prompt:
+                "Scan the whole library for filesystem changes?\n\n" +
+                  "For each release with a file path, re-reads audio tags " +
+                  "and looks up the local cover, updating the DB to match " +
+                  "what's on disk. Reports refreshed / unchanged / " +
+                  "orphaned (path missing) counts at the end.\n\n" +
+                  "Useful after editing files in another music app.",
+              startEvent: "scan:started",
+              progressEvent: "scan:progress",
+            };
 
-    if (!confirm(config.prompt)) return;
+    const dialogTitle =
+      kind === "extract"
+        ? "Extract embedded artwork"
+        : kind === "rescan"
+          ? "Rescan local covers"
+          : "Scan library for changes";
+    const yes = await ask(config.prompt, {
+      title: dialogTitle,
+      kind: "info",
+    });
+    if (!yes) return;
 
     setActiveOp(kind);
     setOpSummary(null);
@@ -117,9 +160,12 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
       if (kind === "extract") {
         const data = await extractEmbeddedCovers();
         setOpSummary({ kind: "extract", data });
-      } else {
+      } else if (kind === "rescan") {
         const data = await rescanLocalCovers();
         setOpSummary({ kind: "rescan", data });
+      } else {
+        const data = await scanLibraryChanges();
+        setOpSummary({ kind: "scan", data });
       }
       await reload();
     } catch (e) {
@@ -127,6 +173,78 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
     } finally {
       unlisteners.forEach((f) => f());
       setActiveOp(null);
+    }
+  }
+
+  async function deleteOrphan(e: React.MouseEvent, orphan: OrphanInfo) {
+    e.preventDefault();
+    e.stopPropagation();
+    const yes = await ask(
+      `Delete the database row for "${orphan.artist} — ${orphan.title}"?\n\n` +
+        `Old path: ${orphan.filePath}\n\n` +
+        `The release is already missing from disk; this removes the orphaned ` +
+        `DB row. Any previously-published Nostr event remains until you ` +
+        `Unpublish it.`,
+      { title: "Delete orphan", kind: "warning" },
+    );
+    if (!yes) return;
+    try {
+      await deleteRelease(orphan.id);
+      setOpSummary((prev) => {
+        if (!prev || prev.kind !== "scan") return prev;
+        return {
+          kind: "scan",
+          data: {
+            ...prev.data,
+            scanned: Math.max(0, prev.data.scanned - 1),
+            orphaned: Math.max(0, prev.data.orphaned - 1),
+            orphans: prev.data.orphans.filter((o) => o.id !== orphan.id),
+          },
+        };
+      });
+      await reload();
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function relocateOrphan(
+    e: React.MouseEvent,
+    orphan: OrphanInfo,
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+    let picked: string | null;
+    try {
+      const result = await openDialog({
+        directory: true,
+        multiple: false,
+        title: `New location for ${orphan.artist} — ${orphan.title}`,
+      });
+      picked = typeof result === "string" ? result : null;
+    } catch (err) {
+      setError(String(err));
+      return;
+    }
+    if (!picked) return;
+
+    try {
+      await updateReleasePath(orphan.id, picked);
+      setOpSummary((prev) => {
+        if (!prev || prev.kind !== "scan") return prev;
+        return {
+          kind: "scan",
+          data: {
+            ...prev.data,
+            orphaned: Math.max(0, prev.data.orphaned - 1),
+            refreshed: prev.data.refreshed + 1,
+            orphans: prev.data.orphans.filter((o) => o.id !== orphan.id),
+          },
+        };
+      });
+      await reload();
+    } catch (err) {
+      setError(String(err));
     }
   }
 
@@ -181,6 +299,18 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadKey, medium, needsCoverOnly]);
+
+  // Bubble filter state + visible-items count up so other panels (like the
+  // Nostr Sync publish-library button) can render contextual UI.
+  useEffect(() => {
+    if (!onFilterChange) return;
+    onFilterChange({
+      query,
+      medium: medium === "" ? null : medium,
+      needsCoverOnly,
+      count: items.length,
+    });
+  }, [query, medium, needsCoverOnly, items.length, onFilterChange]);
 
   // When the no-cover filter is turned on, autofocus the first row's URL
   // input once the list has loaded.
@@ -301,6 +431,20 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
           />
         </button>
         <button
+          onClick={() => runBackgroundOp("scan")}
+          disabled={activeOp !== null}
+          className="p-2 rounded-md bg-surface hover:bg-surfaceHover text-fg
+                     disabled:opacity-50"
+          title="Scan library for changes — re-read tags + cover for every release with a file path"
+        >
+          <ScanLine
+            size={14}
+            className={
+              activeOp === "scan" ? "animate-pulse text-accent" : ""
+            }
+          />
+        </button>
+        <button
           onClick={reload}
           disabled={loading}
           className="p-2 rounded-md bg-surface hover:bg-surfaceHover text-fg
@@ -321,7 +465,9 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
             <span>
               {activeOp === "extract"
                 ? "extracting embedded artwork"
-                : "scanning for local cover files"}{" "}
+                : activeOp === "rescan"
+                  ? "scanning for local cover files"
+                  : "scanning library for changes"}{" "}
               <span className="font-mono text-fg">
                 {opProgress.current.toLocaleString()}/
                 {(opProgress.total || 0).toLocaleString()}
@@ -353,7 +499,7 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
         <div className="mt-2 px-3 py-2 rounded-md bg-surface/40 text-xs
                         flex items-center justify-between gap-2">
           <div className="flex flex-wrap gap-x-3 gap-y-0.5">
-            {opSummary.kind === "extract" ? (
+            {opSummary.kind === "extract" && (
               <>
                 <span className="text-ok">
                   extracted{" "}
@@ -372,7 +518,8 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
                   </span>
                 )}
               </>
-            ) : (
+            )}
+            {opSummary.kind === "rescan" && (
               <>
                 <span className="text-ok">
                   matched{" "}
@@ -386,6 +533,30 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
                   <span className="text-muted">
                     no dir{" "}
                     <span className="font-mono">{opSummary.data.noDir}</span>
+                  </span>
+                )}
+              </>
+            )}
+            {opSummary.kind === "scan" && (
+              <>
+                <span className="text-ok">
+                  refreshed{" "}
+                  <span className="font-mono">{opSummary.data.refreshed}</span>
+                </span>
+                <span className="text-muted">
+                  unchanged{" "}
+                  <span className="font-mono">{opSummary.data.noChanges}</span>
+                </span>
+                {opSummary.data.orphaned > 0 && (
+                  <span className="text-warn">
+                    orphaned{" "}
+                    <span className="font-mono">{opSummary.data.orphaned}</span>
+                  </span>
+                )}
+                {opSummary.data.noAudio > 0 && (
+                  <span className="text-muted">
+                    no audio{" "}
+                    <span className="font-mono">{opSummary.data.noAudio}</span>
                   </span>
                 )}
               </>
@@ -407,6 +578,53 @@ export function ReleaseList({ reloadKey, onSelect, selected }: Props) {
             ✕
           </button>
         </div>
+      )}
+
+      {!activeOp && opSummary?.kind === "scan" && opSummary.data.orphans.length > 0 && (
+        <details className="mt-2 px-3 py-2 rounded-md bg-surface/40">
+          <summary className="text-warn cursor-pointer text-xs">
+            {opSummary.data.orphans.length} orphan
+            {opSummary.data.orphans.length === 1 ? "" : "s"} — path missing on
+            disk
+          </summary>
+          <ul className="mt-2 max-h-64 overflow-auto space-y-1 text-[10px]">
+            {opSummary.data.orphans.map((o) => (
+              <li
+                key={o.id}
+                className="px-2 py-1 rounded bg-bg/50 flex items-start gap-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="text-fg">
+                    {o.artist}{" "}
+                    <span className="text-muted">·</span> {o.title}
+                  </div>
+                  <div className="text-muted font-mono break-all">
+                    {o.filePath}
+                  </div>
+                </div>
+                <div className="shrink-0 flex items-center gap-1">
+                  <button
+                    onClick={(e) => relocateOrphan(e, o)}
+                    className="px-2 py-1 rounded bg-mauve/15 text-mauve
+                               hover:bg-mauve hover:text-bg text-[10px]
+                               font-medium transition-colors"
+                    title="Pick the new directory for this release"
+                  >
+                    Locate…
+                  </button>
+                  <button
+                    onClick={(e) => deleteOrphan(e, o)}
+                    className="px-2 py-1 rounded text-muted hover:text-alert
+                               text-[10px] font-medium transition-colors"
+                    title="Remove this orphaned row from the database"
+                  >
+                    delete
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
 
       <ul className="mt-1 flex-1 overflow-auto rounded-md

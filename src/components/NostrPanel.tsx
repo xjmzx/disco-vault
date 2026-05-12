@@ -23,9 +23,17 @@ import {
   type PublishProgress,
 } from "../lib/tauri";
 
+interface FilterContext {
+  query: string;
+  medium: "physical" | "digital" | null;
+  needsCoverOnly: boolean;
+  count: number;
+}
+
 interface NostrPanelProps {
   relays: string[];
   setRelays: (next: string[]) => void;
+  filterContext: FilterContext;
 }
 
 type Phase = "loading" | "loggedOut" | "reveal" | "loggedIn";
@@ -38,7 +46,25 @@ interface ProfileMeta {
   picture?: string;
 }
 
-export function NostrPanel({ relays, setRelays }: NostrPanelProps) {
+function isFilterActive(f: FilterContext): boolean {
+  return (
+    f.query.trim() !== "" || f.medium !== null || f.needsCoverOnly
+  );
+}
+
+function describeFilter(f: FilterContext): string {
+  const parts: string[] = [];
+  if (f.medium) parts.push(f.medium);
+  if (f.query.trim()) parts.push(`search "${f.query.trim()}"`);
+  if (f.needsCoverOnly) parts.push("no cover");
+  return parts.join(", ");
+}
+
+export function NostrPanel({
+  relays,
+  setRelays,
+  filterContext,
+}: NostrPanelProps) {
   const [newRelay, setNewRelay] = useState("");
 
   const [phase, setPhase] = useState<Phase>("loading");
@@ -191,7 +217,16 @@ export function NostrPanel({ relays, setRelays }: NostrPanelProps) {
         }),
       );
 
-      const summary = await publishLibrary(relays);
+      const summary = await publishLibrary(
+        relays,
+        isFilterActive(filterContext)
+          ? {
+              query: filterContext.query.trim() || undefined,
+              medium: filterContext.medium ?? undefined,
+              needsCover: filterContext.needsCoverOnly || undefined,
+            }
+          : undefined,
+      );
       setPublishSummary(summary);
       setPublishPhase("done");
     } catch (e) {
@@ -358,6 +393,7 @@ export function NostrPanel({ relays, setRelays }: NostrPanelProps) {
             summary={publishSummary}
             relayCount={relays.length}
             error={publishError}
+            filterContext={filterContext}
             onAskConfirm={() => {
               setPublishError(null);
               setPublishPhase("confirm");
@@ -425,6 +461,7 @@ interface PublishLibraryBlockProps {
   summary: PublishLibrarySummary | null;
   relayCount: number;
   error: string | null;
+  filterContext: FilterContext;
   onAskConfirm: () => void;
   onCancel: () => void;
   onConfirm: () => void;
@@ -437,35 +474,59 @@ function PublishLibraryBlock({
   summary,
   relayCount,
   error,
+  filterContext,
   onAskConfirm,
   onCancel,
   onConfirm,
   onAcknowledgeDone,
 }: PublishLibraryBlockProps) {
+  const filterActive = isFilterActive(filterContext);
+  const buttonLabel = filterActive
+    ? `Publish ${filterContext.count.toLocaleString()} filtered ` +
+      `release${filterContext.count === 1 ? "" : "s"}`
+    : "Publish library";
+  const filterDescription = filterActive ? describeFilter(filterContext) : "";
   if (phase === "idle") {
     return (
       <>
         <button
           onClick={onAskConfirm}
-          disabled={relayCount === 0}
+          disabled={relayCount === 0 || (filterActive && filterContext.count === 0)}
           className={`${DB_BUTTON_CLS} mt-3 w-full justify-center
                       disabled:opacity-50 disabled:cursor-not-allowed`}
         >
-          <Upload size={14} /> Publish library
+          <Upload size={14} /> {buttonLabel}
         </button>
+        {filterActive && (
+          <div className="mt-1 text-[10px] text-muted text-center">
+            filter: {filterDescription}
+          </div>
+        )}
         {error && <div className="mt-2 text-alert text-xs">{error}</div>}
       </>
     );
   }
 
   if (phase === "confirm") {
+    const count = filterActive ? filterContext.count : null;
     return (
       <div className="mt-3 rounded-md border border-warn/40 bg-warn/10 p-3">
         <div className="flex items-center gap-2 text-warn font-semibold text-xs">
           <AlertTriangle size={14} /> Publishing is public and permanent
         </div>
         <p className="mt-1 text-xs text-fg/90">
-          Each release in your library will be signed and broadcast to{" "}
+          {filterActive ? (
+            <>
+              <span className="font-mono text-accent">
+                {count?.toLocaleString()}
+              </span>{" "}
+              release{count === 1 ? "" : "s"} matching the current filter
+              (<span className="font-mono">{filterDescription}</span>) will
+              be signed and broadcast to{" "}
+            </>
+          ) : (
+            "Each release in your library will be signed and broadcast to "
+          )}
           <span className="font-mono text-accent">{relayCount}</span>{" "}
           {relayCount === 1 ? "relay" : "relays"} as a kind:31237 event.
           Relays cache and indexers archive — once out there, the data is
@@ -484,7 +545,8 @@ function PublishLibraryBlock({
             className="px-3 py-1.5 rounded-md bg-accent text-bg font-semibold
                        hover:opacity-90 flex items-center gap-1.5"
           >
-            <Upload size={12} /> Yes, publish all
+            <Upload size={12} />{" "}
+            {filterActive ? "Yes, publish filtered" : "Yes, publish all"}
           </button>
         </div>
       </div>

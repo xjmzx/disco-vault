@@ -505,6 +505,131 @@ fn refresh_release(
     })
 }
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanInfo {
+    pub id: i64,
+    pub artist: String,
+    pub title: String,
+    pub file_path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryScanSummary {
+    pub scanned: usize,
+    pub refreshed: usize,
+    pub no_changes: usize,
+    pub orphaned: usize,
+    pub no_audio: usize,
+    pub no_path: usize,
+    pub orphans: Vec<OrphanInfo>,
+    pub errors: Vec<String>,
+}
+
+#[tauri::command]
+fn scan_library_changes(
+    app: tauri::AppHandle,
+) -> Result<LibraryScanSummary, String> {
+    // Pull all releases that have a file_path. Physical releases without a
+    // path are excluded — there's nothing on disk to scan against. Fetch
+    // artist/title up front so we can surface orphan details without a
+    // second DB round-trip per orphan.
+    let candidates: Vec<(i64, String, String, String)> = {
+        let conn = open(&app)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, artist, title, file_path
+                 FROM releases
+                 WHERE file_path IS NOT NULL AND file_path <> ''
+                 ORDER BY artist COLLATE NOCASE, year, title COLLATE NOCASE",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+
+    let total = candidates.len();
+    let mut summary = LibraryScanSummary {
+        scanned: total,
+        refreshed: 0,
+        no_changes: 0,
+        orphaned: 0,
+        no_audio: 0,
+        no_path: 0,
+        orphans: Vec::new(),
+        errors: Vec::new(),
+    };
+    let _ = app.emit("scan:started", total);
+
+    for (i, (release_id, artist, title, file_path)) in candidates.iter().enumerate() {
+        let _ = app.emit(
+            "scan:progress",
+            ImportProgress {
+                current: i + 1,
+                total,
+                current_dir: file_path.clone(),
+            },
+        );
+
+        match refresh_release(app.clone(), *release_id) {
+            Ok(result) => match result.status.as_str() {
+                "ok" => summary.refreshed += 1,
+                "no_changes" => summary.no_changes += 1,
+                "missing_path" => {
+                    summary.orphaned += 1;
+                    summary.orphans.push(OrphanInfo {
+                        id: *release_id,
+                        artist: artist.clone(),
+                        title: title.clone(),
+                        file_path: file_path.clone(),
+                    });
+                }
+                "no_audio" => summary.no_audio += 1,
+                "no_path" => summary.no_path += 1,
+                _ => {}
+            },
+            Err(e) => summary
+                .errors
+                .push(format!("release {}: {}", release_id, e)),
+        }
+    }
+
+    Ok(summary)
+}
+
+#[tauri::command]
+fn update_release_path(
+    app: tauri::AppHandle,
+    release_id: i64,
+    new_path: String,
+) -> Result<RefreshResult, String> {
+    let trimmed = new_path.trim().to_owned();
+    if trimmed.is_empty() {
+        return Err("empty path".into());
+    }
+    {
+        let conn = open(&app)?;
+        conn.execute(
+            "UPDATE releases
+             SET file_path = ?1, updated_at = strftime('%s','now')
+             WHERE id = ?2",
+            params![trimmed, release_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    refresh_release(app, release_id)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CoverSyncResult {
@@ -930,6 +1055,9 @@ async fn publish_release(
 async fn publish_library(
     app: tauri::AppHandle,
     relays: Vec<String>,
+    query: Option<String>,
+    medium: Option<String>,
+    needs_cover: Option<bool>,
 ) -> Result<PublishLibrarySummary, String> {
     if relays.is_empty() {
         return Err("no relays configured".into());
@@ -939,14 +1067,29 @@ async fn publish_library(
 
     let releases: Vec<Release> = {
         let conn = open(&app)?;
+        let q = query.unwrap_or_default();
+        let q_like = format!("%{}%", q);
+        let no_cover_clause = "(cover_art_url IS NULL OR cover_art_url = '')
+                           AND (cover_art_path IS NULL OR cover_art_path = '')";
+        let cover_filter = match needs_cover {
+            Some(true) => format!("AND {}", no_cover_clause),
+            Some(false) => format!("AND NOT ({})", no_cover_clause),
+            None => String::new(),
+        };
         let sql = format!(
-            "SELECT {} FROM releases
+            "SELECT {cols}
+             FROM releases
+             WHERE (?1 = '' OR artist LIKE ?2 OR title LIKE ?2
+                              OR label  LIKE ?2 OR catalog_number LIKE ?2)
+               AND (?3 IS NULL OR medium = ?3)
+               {cover}
              ORDER BY artist COLLATE NOCASE, year, title COLLATE NOCASE",
-            RELEASE_SELECT_COLS
+            cols = RELEASE_SELECT_COLS,
+            cover = cover_filter,
         );
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], row_to_release)
+            .query_map(params![q, q_like, medium], row_to_release)
             .map_err(|e| e.to_string())?;
         rows.filter_map(|r| r.ok()).collect()
     };
@@ -2009,7 +2152,9 @@ pub fn run() {
             extract_embedded_covers,
             rescan_local_covers,
             refresh_release,
+            scan_library_changes,
             sync_cover_to_disk,
+            update_release_path,
             generate_keypair,
             import_keypair,
             get_npub,
