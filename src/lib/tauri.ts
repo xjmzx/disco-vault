@@ -134,6 +134,29 @@ export async function rescanLocalCovers(): Promise<RescanSummary> {
   return invoke<RescanSummary>("rescan_local_covers");
 }
 
+// --- Interop: refresh from disk + sync cover to disk ------------------------
+
+export interface RefreshResult {
+  status: string;
+  changes: string[];
+}
+
+export async function refreshRelease(releaseId: number): Promise<RefreshResult> {
+  return invoke<RefreshResult>("refresh_release", { releaseId });
+}
+
+export interface CoverSyncResult {
+  status: string;
+  written: string | null;
+  bytes: number | null;
+}
+
+export async function syncCoverToDisk(
+  releaseId: number,
+): Promise<CoverSyncResult> {
+  return invoke<CoverSyncResult>("sync_cover_to_disk", { releaseId });
+}
+
 // --- Nostr identity ----------------------------------------------------------
 
 export interface Keypair {

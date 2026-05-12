@@ -4,8 +4,10 @@ import {
   Copy,
   ExternalLink,
   FileMusic,
+  ImageDown,
   Image as ImageIcon,
   Pencil,
+  RefreshCcw,
   Trash2,
   Undo2,
   Upload,
@@ -17,9 +19,13 @@ import { coverImageSrc } from "../lib/cover";
 import {
   deleteRelease,
   publishRelease,
+  refreshRelease,
   setCoverArtUrl,
+  syncCoverToDisk,
   unpublishRelease,
+  type CoverSyncResult,
   type PublishResult,
+  type RefreshResult,
   type Release,
 } from "../lib/tauri";
 
@@ -46,6 +52,12 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
   const [coverSaving, setCoverSaving] = useState(false);
   const [coverError, setCoverError] = useState<string | null>(null);
 
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshResult, setRefreshResult] = useState<RefreshResult | null>(null);
+  const [syncingCover, setSyncingCover] = useState(false);
+  const [syncResult, setSyncResult] = useState<CoverSyncResult | null>(null);
+  const [interopError, setInteropError] = useState<string | null>(null);
+
   // Reset publish + cover state when switching to a different release.
   useEffect(() => {
     setPublishResult(null);
@@ -54,6 +66,9 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
     setEditingCover(false);
     setCoverDraft("");
     setCoverError(null);
+    setRefreshResult(null);
+    setSyncResult(null);
+    setInteropError(null);
   }, [release.id]);
 
   async function saveCoverUrl() {
@@ -121,6 +136,43 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
       setPublishError(String(e));
     } finally {
       setPublishing(false);
+    }
+  }
+
+  async function onRefresh() {
+    if (!release.id) return;
+    setRefreshing(true);
+    setRefreshResult(null);
+    setInteropError(null);
+    try {
+      const result = await refreshRelease(release.id);
+      setRefreshResult(result);
+      if (result.status === "ok") {
+        // Optimistically reflect the changes that matter to display.
+        onChanged({ ...release });
+      }
+    } catch (e) {
+      setInteropError(String(e));
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function onSyncCover() {
+    if (!release.id) return;
+    setSyncingCover(true);
+    setSyncResult(null);
+    setInteropError(null);
+    try {
+      const result = await syncCoverToDisk(release.id);
+      setSyncResult(result);
+      if (result.status === "ok" && result.written) {
+        onChanged({ ...release, coverArtPath: result.written });
+      }
+    } catch (e) {
+      setInteropError(String(e));
+    } finally {
+      setSyncingCover(false);
     }
   }
 
@@ -250,7 +302,78 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
             <Undo2 size={14} />
             {unpublishing ? "unpublishing…" : "Unpublish"}
           </button>
+          {release.filePath && (
+            <button
+              onClick={onRefresh}
+              disabled={refreshing}
+              className={`${DB_BUTTON_CLS} disabled:opacity-50 disabled:cursor-not-allowed`}
+              title="Re-read tags + cover from the release's local directory"
+            >
+              <RefreshCcw size={14} />
+              {refreshing ? "refreshing…" : "Refresh from disk"}
+            </button>
+          )}
+          {release.filePath && release.coverArtUrl && (
+            <button
+              onClick={onSyncCover}
+              disabled={syncingCover}
+              className={`${DB_BUTTON_CLS} disabled:opacity-50 disabled:cursor-not-allowed`}
+              title="Download the published cover URL and save it as cover.jpg in the release folder"
+            >
+              <ImageDown size={14} />
+              {syncingCover ? "downloading…" : "Sync cover to disk"}
+            </button>
+          )}
         </div>
+
+        {interopError && (
+          <div className="mt-2 text-alert text-xs">{interopError}</div>
+        )}
+        {refreshResult && (
+          <div className="mt-2 text-xs">
+            {refreshResult.status === "ok" && (
+              <span className="text-ok">
+                refreshed: {refreshResult.changes.join(", ")}
+              </span>
+            )}
+            {refreshResult.status === "no_changes" && (
+              <span className="text-muted">no changes — DB already current</span>
+            )}
+            {refreshResult.status === "missing_path" && (
+              <span className="text-warn">file path missing on disk</span>
+            )}
+            {refreshResult.status === "no_audio" && (
+              <span className="text-warn">no audio files in directory</span>
+            )}
+            {refreshResult.status === "no_path" && (
+              <span className="text-muted">release has no file path</span>
+            )}
+          </div>
+        )}
+        {syncResult && (
+          <div className="mt-2 text-xs">
+            {syncResult.status === "ok" && syncResult.written && (
+              <span className="text-ok">
+                wrote {(syncResult.bytes ?? 0) / 1024 < 1024
+                  ? `${Math.round((syncResult.bytes ?? 0) / 1024)} KB`
+                  : `${((syncResult.bytes ?? 0) / 1024 / 1024).toFixed(1)} MB`}
+                {" → "}
+                <span className="font-mono text-muted break-all">
+                  {syncResult.written}
+                </span>
+              </span>
+            )}
+            {syncResult.status === "no_url" && (
+              <span className="text-muted">no cover URL to sync</span>
+            )}
+            {syncResult.status === "no_path" && (
+              <span className="text-muted">release has no file path</span>
+            )}
+            {syncResult.status === "missing_path" && (
+              <span className="text-warn">file path missing on disk</span>
+            )}
+          </div>
+        )}
 
         {publishError && (
           <div className="mt-2 text-alert text-xs">{publishError}</div>

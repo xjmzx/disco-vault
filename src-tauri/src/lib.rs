@@ -380,6 +380,254 @@ fn get_stats(app: tauri::AppHandle) -> Result<Stats, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Interop: refresh metadata from disk; sync published cover URL to local file
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshResult {
+    pub status: String, // "ok" | "no_changes" | "missing_path" | "no_path" | "no_audio"
+    pub changes: Vec<String>,
+}
+
+#[tauri::command]
+fn refresh_release(
+    app: tauri::AppHandle,
+    release_id: i64,
+) -> Result<RefreshResult, String> {
+    let conn = open(&app)?;
+    let sql = format!(
+        "SELECT {} FROM releases WHERE id = ?1",
+        RELEASE_SELECT_COLS
+    );
+    let release: Release = conn
+        .query_row(&sql, params![release_id], row_to_release)
+        .map_err(|e| e.to_string())?;
+
+    let Some(file_path) = release.file_path.as_deref() else {
+        return Ok(RefreshResult {
+            status: "no_path".into(),
+            changes: vec![],
+        });
+    };
+    let path = PathBuf::from(file_path);
+    if !path.exists() {
+        return Ok(RefreshResult {
+            status: "missing_path".into(),
+            changes: vec![],
+        });
+    }
+
+    // Treat file_path as the album dir for folder-imported releases, or fall
+    // back to its parent for manually-added single-file entries.
+    let dir = if path.is_dir() {
+        path.clone()
+    } else {
+        path.parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
+
+    let mut audio_files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.filter_map(|e| e.ok()).map(|e| e.path()))
+        .filter(|p| p.is_file() && is_audio(p))
+        .collect();
+    audio_files.sort();
+
+    if audio_files.is_empty() {
+        return Ok(RefreshResult {
+            status: "no_audio".into(),
+            changes: vec![],
+        });
+    }
+
+    let info = read_dir_tags(&audio_files);
+
+    let new_artist = info.artist.clone().unwrap_or_else(|| release.artist.clone());
+    let new_title = info.title.clone().unwrap_or_else(|| release.title.clone());
+    let new_year = info.year.or(release.year);
+    let new_format_str = if info.codec.is_some() {
+        Some(build_format_string(&info))
+    } else {
+        release.format.clone()
+    };
+    let new_cover_path = find_cover(&dir).or_else(|| release.cover_art_path.clone());
+
+    let mut changes: Vec<String> = Vec::new();
+    if new_artist != release.artist {
+        changes.push("artist".into());
+    }
+    if new_title != release.title {
+        changes.push("title".into());
+    }
+    if new_year != release.year {
+        changes.push("year".into());
+    }
+    if new_format_str != release.format {
+        changes.push("format".into());
+    }
+    if new_cover_path != release.cover_art_path {
+        changes.push("cover_art_path".into());
+    }
+
+    if changes.is_empty() {
+        return Ok(RefreshResult {
+            status: "no_changes".into(),
+            changes,
+        });
+    }
+
+    conn.execute(
+        "UPDATE releases
+         SET artist = ?1,
+             title = ?2,
+             year = ?3,
+             format = ?4,
+             cover_art_path = ?5,
+             updated_at = strftime('%s','now')
+         WHERE id = ?6",
+        params![
+            new_artist,
+            new_title,
+            new_year,
+            new_format_str,
+            new_cover_path,
+            release_id,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(RefreshResult {
+        status: "ok".into(),
+        changes,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverSyncResult {
+    pub status: String, // "ok" | "no_url" | "no_path" | "missing_path"
+    pub written: Option<String>,
+    pub bytes: Option<u64>,
+}
+
+fn ext_for_content_type(content_type: Option<&str>, url: &str) -> &'static str {
+    if let Some(ct) = content_type {
+        let lower = ct.to_lowercase();
+        if lower.contains("png") {
+            return "png";
+        }
+        if lower.contains("webp") {
+            return "webp";
+        }
+        if lower.contains("gif") {
+            return "gif";
+        }
+        if lower.contains("jpeg") || lower.contains("jpg") {
+            return "jpg";
+        }
+    }
+    // Fallback: URL extension.
+    if let Some(idx) = url.rfind('.') {
+        let ext = &url[idx + 1..].to_lowercase();
+        if ["jpg", "jpeg", "png", "webp", "gif"].contains(&ext.as_str()) {
+            return if ext == "jpeg" { "jpg" } else { Box::leak(ext.clone().into_boxed_str()) };
+        }
+    }
+    "jpg"
+}
+
+#[tauri::command]
+async fn sync_cover_to_disk(
+    app: tauri::AppHandle,
+    release_id: i64,
+) -> Result<CoverSyncResult, String> {
+    let (file_path, cover_url) = {
+        let conn = open(&app)?;
+        let row: (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT file_path, cover_art_url FROM releases WHERE id = ?1",
+                params![release_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|e| e.to_string())?;
+        row
+    };
+
+    let Some(cover_url) = cover_url.filter(|s| !s.trim().is_empty()) else {
+        return Ok(CoverSyncResult {
+            status: "no_url".into(),
+            written: None,
+            bytes: None,
+        });
+    };
+    let Some(file_path) = file_path.filter(|s| !s.trim().is_empty()) else {
+        return Ok(CoverSyncResult {
+            status: "no_path".into(),
+            written: None,
+            bytes: None,
+        });
+    };
+
+    let path = PathBuf::from(&file_path);
+    let dir = if path.is_dir() {
+        path.clone()
+    } else if let Some(parent) = path.parent() {
+        parent.to_path_buf()
+    } else {
+        return Ok(CoverSyncResult {
+            status: "missing_path".into(),
+            written: None,
+            bytes: None,
+        });
+    };
+    if !dir.exists() {
+        return Ok(CoverSyncResult {
+            status: "missing_path".into(),
+            written: None,
+            bytes: None,
+        });
+    }
+
+    let response = reqwest::get(&cover_url)
+        .await
+        .map_err(|e| format!("fetch {}: {}", cover_url, e))?;
+    let ct = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_owned());
+    let ext = ext_for_content_type(ct.as_deref(), &cover_url);
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| format!("read body: {}", e))?;
+
+    let out = dir.join(format!("cover.{}", ext));
+    std::fs::write(&out, &body).map_err(|e| {
+        format!("write {}: {}", out.display(), e)
+    })?;
+
+    let out_str = out.to_string_lossy().into_owned();
+    let conn = open(&app)?;
+    conn.execute(
+        "UPDATE releases
+         SET cover_art_path = ?1, updated_at = strftime('%s','now')
+         WHERE id = ?2",
+        params![out_str, release_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(CoverSyncResult {
+        status: "ok".into(),
+        written: Some(out_str),
+        bytes: Some(body.len() as u64),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Nostr identity (keypair stored in OS keychain)
 // ---------------------------------------------------------------------------
 
@@ -1760,6 +2008,8 @@ pub fn run() {
             import_discogs_csv,
             extract_embedded_covers,
             rescan_local_covers,
+            refresh_release,
+            sync_cover_to_disk,
             generate_keypair,
             import_keypair,
             get_npub,
