@@ -1,11 +1,13 @@
 import { FormEvent, useState } from "react";
-import { ChevronDown, Plus, Save } from "lucide-react";
+import { ChevronDown, ChevronUp, Plus, Save } from "lucide-react";
 import { Section } from "./Section";
 import { addRelease, type Release } from "../lib/tauri";
 
 interface Props {
   onAdded: () => void;
 }
+
+type Medium = "physical" | "digital";
 
 const EMPTY: Release = {
   artist: "",
@@ -57,6 +59,10 @@ export function AddReleaseForm({ onAdded }: Props) {
   return (
     <Section title="Add release" icon={<Plus size={16} />}>
       <form onSubmit={onSubmit} className="text-xs space-y-1.5">
+        <MediumToggle
+          value={(release.medium ?? "physical") as Medium}
+          onChange={(m) => set("medium", m)}
+        />
         <Field
           label="artist"
           value={release.artist}
@@ -67,31 +73,36 @@ export function AddReleaseForm({ onAdded }: Props) {
           value={release.title}
           onChange={(v) => set("title", v)}
         />
-        <NumField
-          label="year"
-          value={release.year ?? null}
-          onChange={(v) => set("year", v)}
-        />
-        <SelectField
-          label="medium"
-          value={release.medium ?? ""}
-          onChange={(v) => set("medium", (v || null) as Release["medium"])}
-          options={[
-            { value: "", label: "—" },
-            { value: "physical", label: "physical" },
-            { value: "digital", label: "digital" },
-          ]}
-        />
-        <Field
-          label="format"
-          value={release.format ?? ""}
-          onChange={(v) => set("format", v)}
-        />
-        <Field
-          label="condition"
-          value={release.condition ?? ""}
-          onChange={(v) => set("condition", v)}
-        />
+
+        <div className={ROW}>
+          <span className="text-muted text-right">year</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <YearControl
+              value={release.year ?? null}
+              onChange={(v) => set("year", v)}
+            />
+            <FormatSelect
+              value={release.format ?? ""}
+              onChange={(v) => set("format", v)}
+            />
+            <input
+              type="text"
+              value={release.country ?? ""}
+              onChange={(e) => set("country", e.target.value)}
+              placeholder="country"
+              aria-label="country"
+              spellCheck={false}
+              className={`${INPUT_CLS} w-24`}
+            />
+            <span className="text-muted text-xs">condition (physical)</span>
+            <ConditionSelect
+              value={release.condition ?? ""}
+              onChange={(v) => set("condition", v)}
+            />
+          </div>
+        </div>
+
+        <div className="h-2" aria-hidden />
         <Field
           label="label"
           value={release.label ?? ""}
@@ -101,11 +112,6 @@ export function AddReleaseForm({ onAdded }: Props) {
           label="catalog"
           value={release.catalogNumber ?? ""}
           onChange={(v) => set("catalogNumber", v)}
-        />
-        <Field
-          label="country"
-          value={release.country ?? ""}
-          onChange={(v) => set("country", v)}
         />
         <Field
           label="url"
@@ -146,6 +152,60 @@ const INPUT_CLS =
   "px-2 py-1 rounded-md bg-surface text-fg outline-none " +
   "border border-transparent focus:border-accent/50 placeholder:text-muted";
 
+function MediumToggle({
+  value,
+  onChange,
+}: {
+  value: Medium;
+  onChange: (v: Medium) => void;
+}) {
+  return (
+    <div className={ROW}>
+      <span aria-hidden />
+      <div className="flex gap-1">
+        <ToggleButton
+          active={value === "digital"}
+          onClick={() => onChange("digital")}
+        >
+          Digital
+        </ToggleButton>
+        <ToggleButton
+          active={value === "physical"}
+          onClick={() => onChange("physical")}
+        >
+          Physical
+        </ToggleButton>
+      </div>
+    </div>
+  );
+}
+
+function ToggleButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`px-3 py-2 rounded-md text-xs font-semibold transition-colors
+                  ${
+                    active
+                      ? "bg-accent text-bg"
+                      : "bg-surface text-fg hover:bg-surfaceHover"
+                  }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 function Field({
   label,
   value,
@@ -169,66 +229,152 @@ function Field({
   );
 }
 
-function NumField({
-  label,
+function YearControl({
   value,
   onChange,
 }: {
-  label: string;
   value: number | null;
   onChange: (v: number | null) => void;
 }) {
+  function step(delta: number) {
+    const next = (value ?? new Date().getFullYear()) + delta;
+    onChange(next);
+  }
   return (
-    <label className={ROW}>
-      <span className="text-muted text-right">{label}</span>
+    <div className="inline-flex rounded-md overflow-hidden w-fit">
       <input
         type="number"
         value={value ?? ""}
         onChange={(e) =>
           onChange(e.target.value ? Number(e.target.value) : null)
         }
-        className={`${INPUT_CLS} w-24`}
+        aria-label="year"
+        className="w-16 px-2 py-1 bg-surface text-fg outline-none
+                   border border-transparent focus:border-accent/50
+                   placeholder:text-muted
+                   [&::-webkit-inner-spin-button]:appearance-none
+                   [&::-webkit-outer-spin-button]:appearance-none
+                   [appearance:textfield]"
       />
-    </label>
+      <div className="flex flex-col">
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={() => step(1)}
+          aria-label="increment year"
+          className="flex-1 px-1.5 bg-accent text-bg hover:opacity-90
+                     flex items-center justify-center"
+        >
+          <ChevronUp size={10} strokeWidth={3.5} />
+        </button>
+        <button
+          type="button"
+          tabIndex={-1}
+          onClick={() => step(-1)}
+          aria-label="decrement year"
+          className="flex-1 px-1.5 bg-accent text-bg hover:opacity-90
+                     flex items-center justify-center border-t border-bg/30"
+        >
+          <ChevronDown size={10} strokeWidth={3.5} />
+        </button>
+      </div>
+    </div>
   );
 }
 
-function SelectField({
-  label,
+const FORMAT_OPTIONS = [
+  "LP",
+  "12\"",
+  "7\"",
+  "CD",
+  "Cassette",
+  "Box",
+  "FLAC",
+  "MP3",
+  "AAC",
+  "ALAC",
+  "WAV",
+];
+
+// Discogs's standard condition grades. Values match the exact strings Discogs
+// puts in its collection CSV exports so imported entries map cleanly onto
+// these options.
+const CONDITION_OPTIONS = [
+  "Mint (M)",
+  "Near Mint (NM or M-)",
+  "Very Good Plus (VG+)",
+  "Very Good (VG)",
+  "Good Plus (G+)",
+  "Good (G)",
+  "Fair (F)",
+  "Poor (P)",
+];
+
+function FormatSelect({
   value,
   onChange,
-  options,
 }: {
-  label: string;
   value: string;
   onChange: (v: string) => void;
-  options: { value: string; label: string }[];
 }) {
   return (
-    <label className={ROW}>
-      <span className="text-muted text-right">{label}</span>
-      <div className="relative w-fit">
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="appearance-none pl-2.5 pr-7 py-1 rounded-md
-                     bg-accent text-bg font-semibold outline-none
-                     border border-transparent focus:border-fg/30 cursor-pointer"
-        >
-          {options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <ChevronDown
-          size={12}
-          strokeWidth={2.5}
-          className="absolute right-2 top-1/2 -translate-y-1/2 text-bg
-                     pointer-events-none"
-        />
-      </div>
-    </label>
+    <div className="relative">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="format"
+        className="appearance-none pl-2.5 pr-7 py-1 rounded-md bg-surface
+                   text-fg outline-none border border-transparent
+                   focus:border-accent/50 cursor-pointer text-xs"
+      >
+        <option value="">format</option>
+        {FORMAT_OPTIONS.map((f) => (
+          <option key={f} value={f}>
+            {f}
+          </option>
+        ))}
+      </select>
+      <ChevronDown
+        size={12}
+        strokeWidth={2.5}
+        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted
+                   pointer-events-none"
+      />
+    </div>
+  );
+}
+
+function ConditionSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="relative w-fit">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="condition"
+        className="appearance-none pl-2.5 pr-7 py-1 rounded-md bg-surface
+                   text-fg outline-none border border-transparent
+                   focus:border-accent/50 cursor-pointer text-xs"
+      >
+        <option value="">—</option>
+        {CONDITION_OPTIONS.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+      </select>
+      <ChevronDown
+        size={12}
+        strokeWidth={2.5}
+        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted
+                   pointer-events-none"
+      />
+    </div>
   );
 }
 
