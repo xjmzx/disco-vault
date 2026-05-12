@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Section } from "./Section";
+import { DB_BUTTON_CLS } from "../lib/buttonStyles";
 import { coverImageSrc } from "../lib/cover";
 import {
   deleteRelease,
@@ -106,7 +107,7 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
   async function onPublish() {
     if (!release.id) return;
     if (relays.length === 0) {
-      setPublishError("Add at least one relay in the Sync · Nostr panel.");
+      setPublishError("Add at least one relay in the Nostr Sync panel.");
       return;
     }
     setPublishing(true);
@@ -126,7 +127,7 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
   async function onUnpublish() {
     if (!release.id) return;
     if (relays.length === 0) {
-      setPublishError("Add at least one relay in the Sync · Nostr panel.");
+      setPublishError("Add at least one relay in the Nostr Sync panel.");
       return;
     }
     if (
@@ -166,7 +167,12 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
 
   return (
     <Section
-      title={release.title}
+      title={
+        <>
+          <span className="text-fg">{release.artist} /</span>{" "}
+          <span className="text-accent">{release.title}</span>
+        </>
+      }
       icon={<FileMusic size={16} />}
       right={
         <button
@@ -199,9 +205,8 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
           onClear={clearCoverUrl}
         />
         <div className="min-w-0 flex-1">
-          <div className="text-fg font-semibold text-base">{release.artist}</div>
           {coverError && (
-            <div className="mt-1 text-alert text-[10px]">{coverError}</div>
+            <div className="text-alert text-[10px]">{coverError}</div>
           )}
         </div>
       </div>
@@ -226,27 +231,23 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
           <button
             onClick={onPublish}
             disabled={publishing || unpublishing || relays.length === 0}
-            className="px-3 py-1.5 rounded-md bg-accent text-bg font-semibold
-                       hover:opacity-90 disabled:opacity-50
-                       disabled:cursor-not-allowed flex items-center gap-2 text-xs"
+            className={`${DB_BUTTON_CLS} disabled:opacity-50 disabled:cursor-not-allowed`}
             title={
               relays.length === 0
-                ? "Add a relay in the Sync · Nostr panel first"
+                ? "Add a relay in the Nostr Sync panel first"
                 : "Publish this release as a kind:31237 event"
             }
           >
-            <Upload size={12} />
+            <Upload size={14} />
             {publishing ? "publishing…" : "Publish to Nostr"}
           </button>
           <button
             onClick={onUnpublish}
             disabled={publishing || unpublishing || relays.length === 0}
-            className="px-3 py-1.5 rounded-md bg-surface hover:bg-surfaceHover
-                       text-muted hover:text-alert disabled:opacity-50
-                       disabled:cursor-not-allowed flex items-center gap-2 text-xs"
+            className={`${DB_BUTTON_CLS} disabled:opacity-50 disabled:cursor-not-allowed`}
             title="Send NIP-09 deletion request for the published event"
           >
-            <Undo2 size={12} />
+            <Undo2 size={14} />
             {unpublishing ? "unpublishing…" : "Unpublish"}
           </button>
         </div>

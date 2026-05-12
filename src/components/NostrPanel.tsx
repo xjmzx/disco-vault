@@ -12,6 +12,7 @@ import {
 import { SimplePool, nip19 } from "nostr-tools";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Section } from "./Section";
+import { DB_BUTTON_CLS } from "../lib/buttonStyles";
 import {
   clearKeypair,
   generateKeypair,
@@ -208,7 +209,7 @@ export function NostrPanel({ relays, setRelays }: NostrPanelProps) {
   }
 
   return (
-    <Section title="Sync · Nostr" icon={<Radio size={16} />}>
+    <Section title="Nostr Sync" icon={<Radio size={16} />}>
       {phase === "loading" && (
         <div className="text-xs text-muted">checking keychain…</div>
       )}
@@ -297,13 +298,14 @@ export function NostrPanel({ relays, setRelays }: NostrPanelProps) {
 
       {phase === "loggedIn" && npub && (
         <>
-          <IdentityRow profile={profile} npub={npub} />
-
-          <div className="mt-2 flex items-center gap-1.5 text-[10px] text-muted">
-            <Lock size={11} />
-            <span>
-              secret key stored in OS keychain (
-              <span className="font-mono">{KEYRING_BACKEND}</span>)
+          <div className="flex items-center flex-wrap gap-x-3 gap-y-1">
+            <IdentityRow profile={profile} npub={npub} />
+            <span className="flex items-center gap-1.5 text-[10px] text-muted">
+              <Lock size={11} />
+              <span>
+                secret key stored in OS keychain (
+                <span className="font-mono">{KEYRING_BACKEND}</span>)
+              </span>
             </span>
           </div>
 
@@ -343,9 +345,7 @@ export function NostrPanel({ relays, setRelays }: NostrPanelProps) {
               <button
                 onClick={addRelay}
                 disabled={!newRelay.trim()}
-                className="px-3 py-1.5 rounded-md bg-surface
-                           hover:bg-surfaceHover text-fg disabled:opacity-50
-                           text-xs"
+                className={`${DB_BUTTON_CLS} disabled:opacity-50`}
               >
                 Add
               </button>
@@ -372,13 +372,8 @@ export function NostrPanel({ relays, setRelays }: NostrPanelProps) {
           />
 
           <div className="mt-3 flex justify-end">
-            <button
-              onClick={onLogout}
-              className="px-3 py-1.5 rounded-md bg-surface
-                         hover:bg-surfaceHover text-muted hover:text-alert
-                         flex items-center gap-1.5 text-xs"
-            >
-              <LogOut size={12} /> Forget identity
+            <button onClick={onLogout} className={DB_BUTTON_CLS}>
+              <LogOut size={14} /> Forget identity
             </button>
           </div>
 
@@ -403,24 +398,24 @@ function IdentityRow({
 
   if (name && nip05) {
     return (
-      <div className="flex items-baseline gap-2 flex-wrap">
+      <>
         <span className="text-fg font-semibold text-sm">{name}</span>
         <span className="text-accent text-xs font-mono">{nip05}</span>
-      </div>
+      </>
     );
   }
   if (name) {
-    return <div className="text-fg font-semibold text-sm">{name}</div>;
+    return <span className="text-fg font-semibold text-sm">{name}</span>;
   }
   if (nip05) {
-    return <div className="text-accent text-xs font-mono">{nip05}</div>;
+    return <span className="text-accent text-xs font-mono">{nip05}</span>;
   }
   // Brand-new keypair with no published kind:0 yet — at least show a short
   // form of the npub so the user has SOMETHING to confirm they're logged in.
   return (
-    <div className="text-muted text-xs font-mono">
+    <span className="text-muted text-xs font-mono">
       {npub.slice(0, 12)}…{npub.slice(-6)}
-    </div>
+    </span>
   );
 }
 
@@ -453,12 +448,10 @@ function PublishLibraryBlock({
         <button
           onClick={onAskConfirm}
           disabled={relayCount === 0}
-          className="mt-3 w-full px-3 py-2.5 rounded-md bg-accent text-bg
-                     font-semibold hover:opacity-90 disabled:opacity-50
-                     disabled:cursor-not-allowed flex items-center
-                     justify-center gap-2"
+          className={`${DB_BUTTON_CLS} mt-3 w-full justify-center
+                      disabled:opacity-50 disabled:cursor-not-allowed`}
         >
-          <Upload size={16} /> Publish library
+          <Upload size={14} /> Publish library
         </button>
         {error && <div className="mt-2 text-alert text-xs">{error}</div>}
       </>
