@@ -1609,9 +1609,16 @@ fn import_discogs_csv(
 }
 
 // One-shot migration from the disco-vault era. On first launch of the
-// renamed binary we move the old app-data directory and the libsecret entry
-// holding the user's nsec into the new locations. Idempotent: subsequent
-// launches see no legacy paths and bail early.
+// renamed binary we move user data (the SQLite DB and config.json) from the
+// old app-data directory to the new one. The libsecret nsec is migrated
+// separately via `migrate_legacy_keychain`. Idempotent: once user files are
+// gone from the legacy path, subsequent runs are no-ops.
+//
+// We deliberately do NOT rename the whole directory: Tauri creates the new
+// `app_data_dir` during webview initialisation (for CacheStorage, localstorage,
+// etc.) BEFORE `setup` callbacks run, so the new dir effectively always exists
+// by this point. We move individual user files instead, and leave webview
+// state (which is per-bundle-id and not portable) where it sits.
 fn migrate_legacy_data_dir(app: &tauri::AppHandle) -> Result<(), String> {
     let Ok(home) = std::env::var("HOME") else {
         return Ok(());
@@ -1623,36 +1630,81 @@ fn migrate_legacy_data_dir(app: &tauri::AppHandle) -> Result<(), String> {
     if !old_dir.exists() {
         return Ok(());
     }
+
     let new_dir = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("app_data_dir: {}", e))?;
-    if new_dir.exists() {
-        // Both present — could be a partial migration or fresh install with
-        // old data still around. Don't clobber; let the user resolve.
+    std::fs::create_dir_all(&new_dir).map_err(|e| e.to_string())?;
+    let new_id = new_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+
+    // 64 KiB: bigger than a schema-only SQLite stub (~28 KiB on Linux), small
+    // enough that a real disco-vault DB with any releases will exceed it.
+    // Used to distinguish "Tauri-created empty file" from "user already
+    // started using the new install."
+    const STUB_THRESHOLD: u64 = 64 * 1024;
+
+    for filename in ["discography.db", "config.json"] {
+        let src = old_dir.join(filename);
+        if !src.exists() {
+            continue;
+        }
+        let dst = new_dir.join(filename);
+
+        if dst.exists() {
+            let dst_size = std::fs::metadata(&dst)
+                .map(|m| m.len())
+                .unwrap_or(u64::MAX);
+            if dst_size > STUB_THRESHOLD {
+                eprintln!(
+                    "ndisc: keeping existing {} ({} bytes) at new location; \
+                     not overwriting from legacy",
+                    filename, dst_size
+                );
+                continue;
+            }
+            let _ = std::fs::remove_file(&dst);
+        }
+
+        std::fs::rename(&src, &dst).map_err(|e| {
+            format!(
+                "rename {} -> {}: {}",
+                src.display(),
+                dst.display(),
+                e
+            )
+        })?;
+
+        if filename == "config.json" && !new_id.is_empty() {
+            // Rewrite any legacy path references inside config.json.
+            if let Ok(text) = std::fs::read_to_string(&dst) {
+                let rewritten = text.replace(LEGACY_BUNDLE_ID, new_id);
+                if rewritten != text {
+                    let _ = std::fs::write(&dst, rewritten);
+                }
+            }
+        }
+
         eprintln!(
-            "ndisc: both {} and {} exist; skipping data-dir migration",
-            old_dir.display(),
-            new_dir.display()
+            "ndisc: migrated {} -> {}",
+            src.display(),
+            dst.display()
         );
-        return Ok(());
     }
-    if let Some(parent) = new_dir.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+
+    // If the legacy dir has nothing left, drop it. If it still holds webview
+    // state (CacheStorage, localstorage, etc.) we leave it alone — that's
+    // orphaned data for a now-defunct bundle id; the user can delete it by
+    // hand if they want the space back.
+    if let Ok(entries) = std::fs::read_dir(&old_dir) {
+        if entries.filter_map(|e| e.ok()).next().is_none() {
+            let _ = std::fs::remove_dir(&old_dir);
+        }
     }
-    std::fs::rename(&old_dir, &new_dir).map_err(|e| {
-        format!(
-            "rename {} -> {}: {}",
-            old_dir.display(),
-            new_dir.display(),
-            e
-        )
-    })?;
-    eprintln!(
-        "ndisc: migrated app data {} -> {}",
-        old_dir.display(),
-        new_dir.display()
-    );
+
     Ok(())
 }
 
