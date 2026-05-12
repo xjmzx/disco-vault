@@ -17,6 +17,7 @@ export default {
         ok: "#a6e3a1",
         warn: "#f9e2af",
         alert: "#f38ba8",
+        mauve: "#cba6f7",
       },
       fontFamily: {
         sans: ["Helvetica", "Arial", "system-ui", "sans-serif"],

@@ -116,36 +116,51 @@ export default function App() {
 
   return (
     <div className="min-h-screen p-6 max-w-[1500px] mx-auto">
-      <header className="mb-6 flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-accent tracking-tight">
+      <header className="mb-4 px-4 flex items-center justify-between gap-4">
+        <div className="flex items-baseline gap-3 min-w-0">
+          <h1 className="text-2xl font-bold text-accent tracking-tight shrink-0">
             n<span className="text-fg">disc</span>
           </h1>
-          <p className="text-sm text-muted mt-1">
+          <p className="hidden md:block text-xs text-muted truncate">
             physical & digital music collection · search · share via Nostr
           </p>
         </div>
-        <div className="text-xs text-muted text-right">
+
+        <div className="flex items-center gap-2 shrink-0 min-w-0">
           {dbError ? (
-            <span className="text-alert font-mono break-all">{dbError}</span>
+            <span className="text-alert font-mono text-xs break-all max-w-xs truncate">
+              {dbError}
+            </span>
           ) : dbPath ? (
             <>
-              <div className="flex items-center justify-end gap-2 text-[10px] uppercase tracking-wide">
-                <span>db</span>
-                <DbIconButton title="Refresh" onClick={reload}>
-                  <RotateCw size={12} />
-                </DbIconButton>
-                <DbIconButton title="Open existing database…" onClick={onOpenDb}>
-                  <FolderOpen size={12} />
-                </DbIconButton>
-                <DbIconButton title="Create new database…" onClick={onNewDb}>
-                  <FilePlus size={12} />
-                </DbIconButton>
+              <div
+                className="hidden sm:flex items-center gap-2 text-[10px]
+                           uppercase tracking-wide text-muted min-w-0"
+              >
+                <span className="shrink-0">db</span>
+                <span
+                  className="font-mono normal-case text-xs text-fg/70 truncate
+                             max-w-[24rem]"
+                  title={dbPath}
+                >
+                  {dbPath}
+                </span>
               </div>
-              <div className="font-mono">{dbPath}</div>
+              <DbIconButton title="Refresh" onClick={reload}>
+                <RotateCw size={14} />
+              </DbIconButton>
+              <DbIconButton
+                title="Open existing database…"
+                onClick={onOpenDb}
+              >
+                <FolderOpen size={14} />
+              </DbIconButton>
+              <DbIconButton title="Create new database…" onClick={onNewDb}>
+                <FilePlus size={14} />
+              </DbIconButton>
             </>
           ) : (
-            "initialising…"
+            <span className="text-xs text-muted">initialising…</span>
           )}
         </div>
       </header>
@@ -197,8 +212,8 @@ function DbIconButton({
       onClick={onClick}
       title={title}
       aria-label={title}
-      className="p-1 rounded hover:bg-surface text-muted hover:text-fg
-                 transition-colors"
+      className="p-2 rounded-md bg-mauve/15 text-mauve
+                 hover:bg-mauve hover:text-bg transition-colors"
     >
       {children}
     </button>
