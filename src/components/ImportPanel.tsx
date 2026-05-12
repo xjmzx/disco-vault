@@ -147,13 +147,7 @@ export function ImportPanel({ onImported }: Props) {
     <Section title="Import library" icon={<FolderInput size={16} />}>
       {phase === "idle" && (
         <>
-          <p className="text-xs text-muted">
-            Pick a source to bring releases into the library. Folder scan reads
-            audio tags from files (digital). Discogs CSV imports your owned
-            collection (mostly physical). Re-running either source skips items
-            already present.
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               onClick={pickFolder}
               className="px-3 py-2 rounded-md bg-accent text-bg font-semibold
