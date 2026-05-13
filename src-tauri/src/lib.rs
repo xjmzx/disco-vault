@@ -72,6 +72,12 @@ pub struct Release {
     pub cover_art_url: Option<String>,
     pub discogs_id: Option<i64>,
     pub musicbrainz_id: Option<String>,
+    pub release_type: Option<String>,
+    pub category: Option<String>,
+    #[serde(default)]
+    pub last_published_at: Option<i64>,
+    #[serde(default)]
+    pub last_published_naddr: Option<String>,
     #[serde(default)]
     pub added_at: Option<i64>,
     #[serde(default)]
@@ -160,7 +166,74 @@ fn open(app: &tauri::AppHandle) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
     conn.execute_batch(SCHEMA).map_err(|e| e.to_string())?;
     ensure_column(&conn, "releases", "cover_art_url", "TEXT")?;
+    ensure_column(&conn, "releases", "release_type", "TEXT")?;
+    ensure_column(&conn, "releases", "category", "TEXT")?;
+    ensure_column(&conn, "releases", "last_published_at", "INTEGER")?;
+    ensure_column(&conn, "releases", "last_published_naddr", "TEXT")?;
+    backfill_type_category(&conn)?;
+    backfill_source(&conn)?;
     Ok(conn)
+}
+
+/// Converts the legacy provenance-keyword `source` values
+/// (`'discogs'`, `'import'`) into the new URL-only semantics:
+///   - `source='discogs'` rows → synthesize the Discogs release URL from
+///     `discogs_id` when present, otherwise clear to NULL.
+///   - `source='import'` rows (or anything that isn't an http(s) URL) → NULL.
+/// Idempotent: after the first run the WHERE clauses match nothing.
+fn backfill_source(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        "UPDATE releases
+         SET source = 'https://www.discogs.com/release/' || discogs_id
+         WHERE source = 'discogs' AND discogs_id IS NOT NULL",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE releases
+         SET source = NULL
+         WHERE source IS NOT NULL
+           AND source NOT LIKE 'http://%'
+           AND source NOT LIKE 'https://%'",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// One-shot backfill for rows imported before `release_type` and `category`
+/// existed. Idempotent — only touches rows where the destination column is
+/// NULL. After the first run leaves nothing NULL, subsequent calls are no-ops.
+fn backfill_type_category(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        "UPDATE releases SET release_type = 'music' WHERE release_type IS NULL",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, format FROM releases
+             WHERE category IS NULL AND format IS NOT NULL AND format <> ''",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows: Vec<(i64, String)> = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    drop(stmt);
+
+    for (id, format) in rows {
+        if let Some(cat) = category_from_discogs_format(&format) {
+            conn.execute(
+                "UPDATE releases SET category = ?1 WHERE id = ?2",
+                rusqlite::params![cat, id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -196,8 +269,8 @@ fn add_release(app: tauri::AppHandle, release: Release) -> Result<i64, String> {
         "INSERT INTO releases
          (artist, title, year, medium, format, label, catalog_number, country,
           condition, notes, source, file_path, cover_art_path, cover_art_url,
-          discogs_id, musicbrainz_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+          discogs_id, musicbrainz_id, release_type, category)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             release.artist,
             release.title,
@@ -215,6 +288,8 @@ fn add_release(app: tauri::AppHandle, release: Release) -> Result<i64, String> {
             release.cover_art_url,
             release.discogs_id,
             release.musicbrainz_id,
+            release.release_type,
+            release.category,
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -246,6 +321,85 @@ fn set_cover_art_url(
     Ok(())
 }
 
+fn normalize_field(v: Option<String>) -> Option<String> {
+    v.and_then(|s| {
+        let t = s.trim().to_owned();
+        if t.is_empty() { None } else { Some(t) }
+    })
+}
+
+#[tauri::command]
+fn set_release_type(
+    app: tauri::AppHandle,
+    release_id: i64,
+    value: Option<String>,
+) -> Result<(), String> {
+    let normalized = normalize_field(value);
+    let conn = open(&app)?;
+    conn.execute(
+        "UPDATE releases
+         SET release_type = ?1, updated_at = strftime('%s','now')
+         WHERE id = ?2",
+        params![normalized, release_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_release_category(
+    app: tauri::AppHandle,
+    release_id: i64,
+    value: Option<String>,
+) -> Result<(), String> {
+    let normalized = normalize_field(value);
+    let conn = open(&app)?;
+    conn.execute(
+        "UPDATE releases
+         SET category = ?1, updated_at = strftime('%s','now')
+         WHERE id = ?2",
+        params![normalized, release_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_release_country(
+    app: tauri::AppHandle,
+    release_id: i64,
+    value: Option<String>,
+) -> Result<(), String> {
+    let normalized = normalize_field(value);
+    let conn = open(&app)?;
+    conn.execute(
+        "UPDATE releases
+         SET country = ?1, updated_at = strftime('%s','now')
+         WHERE id = ?2",
+        params![normalized, release_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_release_condition(
+    app: tauri::AppHandle,
+    release_id: i64,
+    value: Option<String>,
+) -> Result<(), String> {
+    let normalized = normalize_field(value);
+    let conn = open(&app)?;
+    conn.execute(
+        "UPDATE releases
+         SET condition = ?1, updated_at = strftime('%s','now')
+         WHERE id = ?2",
+        params![normalized, release_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn row_to_release(row: &rusqlite::Row) -> rusqlite::Result<Release> {
     Ok(Release {
         id: row.get(0)?,
@@ -267,13 +421,18 @@ fn row_to_release(row: &rusqlite::Row) -> rusqlite::Result<Release> {
         added_at: row.get(16)?,
         updated_at: row.get(17)?,
         cover_art_url: row.get(18)?,
+        release_type: row.get(19)?,
+        category: row.get(20)?,
+        last_published_at: row.get(21)?,
+        last_published_naddr: row.get(22)?,
     })
 }
 
 const RELEASE_SELECT_COLS: &str =
     "id, artist, title, year, medium, format, label, catalog_number,
      country, condition, notes, source, file_path, cover_art_path,
-     discogs_id, musicbrainz_id, added_at, updated_at, cover_art_url";
+     discogs_id, musicbrainz_id, added_at, updated_at, cover_art_url,
+     release_type, category, last_published_at, last_published_naddr";
 
 #[tauri::command]
 fn list_releases(
@@ -281,6 +440,7 @@ fn list_releases(
     query: Option<String>,
     medium: Option<String>,
     needs_cover: Option<bool>,
+    published_filter: Option<String>,
 ) -> Result<Vec<Release>, String> {
     let conn = open(&app)?;
     let q = query.unwrap_or_default();
@@ -296,6 +456,12 @@ fn list_releases(
         None => String::new(),
     };
 
+    let published_clause = match published_filter.as_deref() {
+        Some("published") => "AND last_published_at IS NOT NULL",
+        Some("unpublished") => "AND last_published_at IS NULL",
+        _ => "",
+    };
+
     let select_sql = format!(
         "SELECT {cols}
          FROM releases
@@ -303,9 +469,11 @@ fn list_releases(
                           OR label  LIKE ?2 OR catalog_number LIKE ?2)
            AND (?3 IS NULL OR medium = ?3)
            {cover}
+           {published}
          ORDER BY artist COLLATE NOCASE, year, title COLLATE NOCASE",
         cols = RELEASE_SELECT_COLS,
         cover = cover_filter,
+        published = published_clause,
     );
     let mut stmt = conn
         .prepare(&select_sql)
@@ -905,6 +1073,12 @@ fn release_event(keys: &Keys, r: &Release) -> Result<Event, String> {
     push_tag(&mut tags, "d", &d)?;
     push_tag(&mut tags, "title", &r.title)?;
     push_tag(&mut tags, "artist", &r.artist)?;
+    if let Some(t) = r.release_type.as_deref() {
+        push_tag(&mut tags, "type", t)?;
+    }
+    if let Some(c) = r.category.as_deref() {
+        push_tag(&mut tags, "category", c)?;
+    }
     if let Some(m) = r.medium.as_deref() {
         push_tag(&mut tags, "medium", m)?;
     }
@@ -925,6 +1099,11 @@ fn release_event(keys: &Keys, r: &Release) -> Result<Event, String> {
     }
     if let Some(c) = r.condition.as_deref() {
         push_tag(&mut tags, "condition", c)?;
+    }
+    if let Some(s) = r.source.as_deref() {
+        if s.starts_with("http://") || s.starts_with("https://") {
+            push_tag(&mut tags, "source", s)?;
+        }
     }
     if let Some(d_id) = r.discogs_id {
         push_tag(&mut tags, "i", &format!("discogs:release:{}", d_id))?;
@@ -967,7 +1146,7 @@ fn split_send_output(output: &Output<EventId>) -> (Vec<String>, Vec<RelayError>)
 
 #[tauri::command]
 async fn unpublish_release(
-    _app: tauri::AppHandle,
+    app: tauri::AppHandle,
     release_id: i64,
     relays: Vec<String>,
 ) -> Result<PublishResult, String> {
@@ -1001,6 +1180,20 @@ async fn unpublish_release(
 
     let output = send_result.map_err(|e| e.to_string())?;
     let (accepted_by, rejected) = split_send_output(&output);
+
+    // Clear publish-state markers on accepted deletion. The naddr stays a
+    // valid address technically, but it points at nothing on relays that
+    // honoured the deletion — so we treat the release as unpublished again.
+    if !accepted_by.is_empty() {
+        let conn = open(&app)?;
+        conn.execute(
+            "UPDATE releases
+             SET last_published_at = NULL, last_published_naddr = NULL
+             WHERE id = ?1",
+            params![release_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
 
     Ok(PublishResult {
         event_id,
@@ -1043,6 +1236,20 @@ async fn publish_release(
     let output = send_result.map_err(|e| e.to_string())?;
     let (accepted_by, rejected) = split_send_output(&output);
 
+    // Persist publish state if at least one relay accepted. Mixed-result is
+    // still "published" — the event exists on the network from then on.
+    if !accepted_by.is_empty() {
+        let conn = open(&app)?;
+        conn.execute(
+            "UPDATE releases
+             SET last_published_at = strftime('%s','now'),
+                 last_published_naddr = ?1
+             WHERE id = ?2",
+            params![naddr, release_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
     Ok(PublishResult {
         event_id,
         naddr,
@@ -1058,6 +1265,7 @@ async fn publish_library(
     query: Option<String>,
     medium: Option<String>,
     needs_cover: Option<bool>,
+    published_filter: Option<String>,
 ) -> Result<PublishLibrarySummary, String> {
     if relays.is_empty() {
         return Err("no relays configured".into());
@@ -1076,6 +1284,11 @@ async fn publish_library(
             Some(false) => format!("AND NOT ({})", no_cover_clause),
             None => String::new(),
         };
+        let published_clause = match published_filter.as_deref() {
+            Some("published") => "AND last_published_at IS NOT NULL",
+            Some("unpublished") => "AND last_published_at IS NULL",
+            _ => "",
+        };
         let sql = format!(
             "SELECT {cols}
              FROM releases
@@ -1083,9 +1296,11 @@ async fn publish_library(
                               OR label  LIKE ?2 OR catalog_number LIKE ?2)
                AND (?3 IS NULL OR medium = ?3)
                {cover}
+               {published}
              ORDER BY artist COLLATE NOCASE, year, title COLLATE NOCASE",
             cols = RELEASE_SELECT_COLS,
             cover = cover_filter,
+            published = published_clause,
         );
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let rows = stmt
@@ -1133,6 +1348,18 @@ async fn publish_library(
                 let (accepted_by, rejected) = split_send_output(&output);
                 if !accepted_by.is_empty() {
                     summary.published += 1;
+                    if let Some(id) = r.id {
+                        let naddr = build_naddr(&keys, &release_d_tag(id), &relays)
+                            .unwrap_or_default();
+                        let conn = open(&app)?;
+                        let _ = conn.execute(
+                            "UPDATE releases
+                             SET last_published_at = strftime('%s','now'),
+                                 last_published_naddr = ?1
+                             WHERE id = ?2",
+                            params![naddr, id],
+                        );
+                    }
                 } else {
                     summary.failed += 1;
                 }
@@ -1651,8 +1878,9 @@ fn import_directory(app: tauri::AppHandle, root: String) -> Result<ImportSummary
 
         match tx.execute(
             "INSERT INTO releases
-             (artist, title, year, medium, format, file_path, cover_art_path, source)
-             VALUES (?1, ?2, ?3, 'digital', ?4, ?5, ?6, 'import')",
+             (artist, title, year, medium, format, file_path, cover_art_path,
+              release_type)
+             VALUES (?1, ?2, ?3, 'digital', ?4, ?5, ?6, 'music')",
             params![artist, title, info.year, format, dir_str, cover],
         ) {
             Ok(_) => summary.imported += 1,
@@ -1931,6 +2159,7 @@ fn import_discogs_csv(
             nonempty(row.get("Collection Sleeve Condition").map(String::as_str).unwrap_or(""));
         let user_notes =
             nonempty(row.get("Collection Notes").map(String::as_str).unwrap_or(""));
+        let country = nonempty(row.get("Country").map(String::as_str).unwrap_or(""));
 
         // Discogs guarantees artist+title, but defend against bad rows.
         let (Some(artist), Some(title)) = (artist, title) else {
@@ -1971,12 +2200,18 @@ fn import_discogs_csv(
 
         let medium = medium_from_format(format);
         let format_opt = nonempty(format);
+        let category = category_from_discogs_format(format);
+
+        let source = discogs_id
+            .map(|id| format!("https://www.discogs.com/release/{}", id));
 
         match tx.execute(
             "INSERT INTO releases
              (artist, title, year, medium, format, label, catalog_number,
-              condition, notes, source, discogs_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'discogs', ?10)",
+              country, condition, notes, source, discogs_id, release_type,
+              category)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                     'music', ?13)",
             params![
                 artist,
                 title,
@@ -1985,9 +2220,12 @@ fn import_discogs_csv(
                 format_opt,
                 label,
                 catalog,
+                country,
                 media_cond,
                 notes,
+                source,
                 discogs_id,
+                category,
             ],
         ) {
             Ok(_) => summary.imported += 1,
@@ -1997,6 +2235,34 @@ fn import_discogs_csv(
 
     tx.commit().map_err(|e| e.to_string())?;
     Ok(summary)
+}
+
+/// Infer a category from a Discogs CSV Format column. Discogs typically
+/// puts the broad release type as a substring like "12\", EP" or "LP, Album".
+fn category_from_discogs_format(format: &str) -> Option<&'static str> {
+    let lower = format.to_lowercase();
+    if lower.contains("mixed") {
+        return Some("mix");
+    }
+    if lower.contains("live") {
+        return Some("live");
+    }
+    if lower.contains("comp") {
+        return Some("compilation");
+    }
+    if lower.contains("ep") {
+        return Some("ep");
+    }
+    if lower.contains("single") {
+        return Some("single");
+    }
+    if lower.contains("album") {
+        return Some("album");
+    }
+    if lower.contains("miscellaneous") {
+        return Some("miscellaneous");
+    }
+    None
 }
 
 // One-shot migration from the disco-vault era. On first launch of the
@@ -2142,6 +2408,10 @@ pub fn run() {
             set_db_path,
             add_release,
             set_cover_art_url,
+            set_release_type,
+            set_release_category,
+            set_release_country,
+            set_release_condition,
             list_releases,
             delete_release,
             get_stats,

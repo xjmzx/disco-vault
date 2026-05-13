@@ -12,7 +12,7 @@ import {
 import { SimplePool, nip19 } from "nostr-tools";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Section } from "./Section";
-import { DB_BUTTON_CLS } from "../lib/buttonStyles";
+import { DB_BUTTON_CLS, SUBTLE_BUTTON_CLS } from "../lib/buttonStyles";
 import {
   clearKeypair,
   generateKeypair,
@@ -27,6 +27,7 @@ interface FilterContext {
   query: string;
   medium: "physical" | "digital" | null;
   needsCoverOnly: boolean;
+  publishedFilter: "published" | "unpublished" | null;
   count: number;
 }
 
@@ -48,13 +49,17 @@ interface ProfileMeta {
 
 function isFilterActive(f: FilterContext): boolean {
   return (
-    f.query.trim() !== "" || f.medium !== null || f.needsCoverOnly
+    f.query.trim() !== "" ||
+    f.medium !== null ||
+    f.needsCoverOnly ||
+    f.publishedFilter !== null
   );
 }
 
 function describeFilter(f: FilterContext): string {
   const parts: string[] = [];
   if (f.medium) parts.push(f.medium);
+  if (f.publishedFilter) parts.push(f.publishedFilter);
   if (f.query.trim()) parts.push(`search "${f.query.trim()}"`);
   if (f.needsCoverOnly) parts.push("no cover");
   return parts.join(", ");
@@ -224,6 +229,7 @@ export function NostrPanel({
               query: filterContext.query.trim() || undefined,
               medium: filterContext.medium ?? undefined,
               needsCover: filterContext.needsCoverOnly || undefined,
+              publishedFilter: filterContext.publishedFilter ?? undefined,
             }
           : undefined,
       );
@@ -244,7 +250,7 @@ export function NostrPanel({
   }
 
   return (
-    <Section title="Nostr Sync" icon={<Radio size={16} />}>
+    <Section title="Nostr Sync" icon={<Radio size={16} />} className="pb-[28px]">
       {phase === "loading" && (
         <div className="text-xs text-muted">checking keychain…</div>
       )}
@@ -333,18 +339,22 @@ export function NostrPanel({
 
       {phase === "loggedIn" && npub && (
         <>
-          <div className="flex items-center flex-wrap gap-x-3 gap-y-1">
+          <div className="flex items-center flex-wrap gap-x-3 gap-y-1
+                          pb-3 border-b border-surface/60">
             <IdentityRow profile={profile} npub={npub} />
-            <span className="flex items-center gap-1.5 text-[10px] text-muted">
+            <span
+              className="flex items-center gap-1.5 text-[10px] text-muted"
+              title={`secret key stored in OS keychain (${KEYRING_BACKEND})`}
+            >
               <Lock size={11} />
-              <span>
-                secret key stored in OS keychain (
-                <span className="font-mono">{KEYRING_BACKEND}</span>)
-              </span>
+              <span>nsec stored in keychain</span>
             </span>
+            <button onClick={onLogout} className={SUBTLE_BUTTON_CLS}>
+              <LogOut size={12} /> Forget identity
+            </button>
           </div>
 
-          <div className="mt-3">
+          <div className="mt-3 max-w-md">
             <div className="text-xs text-muted mb-1">Relays</div>
             <ul className="space-y-1 mb-2">
               {relays.map((r) => (
@@ -387,30 +397,26 @@ export function NostrPanel({
             </div>
           </div>
 
-          <PublishLibraryBlock
-            phase={publishPhase}
-            progress={publishProgress}
-            summary={publishSummary}
-            relayCount={relays.length}
-            error={publishError}
-            filterContext={filterContext}
-            onAskConfirm={() => {
-              setPublishError(null);
-              setPublishPhase("confirm");
-            }}
-            onCancel={() => setPublishPhase("idle")}
-            onConfirm={runPublishLibrary}
-            onAcknowledgeDone={() => {
-              setPublishPhase("idle");
-              setPublishProgress(null);
-              setPublishSummary(null);
-            }}
-          />
-
-          <div className="mt-3 flex justify-end">
-            <button onClick={onLogout} className={DB_BUTTON_CLS}>
-              <LogOut size={14} /> Forget identity
-            </button>
+          <div className="max-w-md">
+            <PublishLibraryBlock
+              phase={publishPhase}
+              progress={publishProgress}
+              summary={publishSummary}
+              relayCount={relays.length}
+              error={publishError}
+              filterContext={filterContext}
+              onAskConfirm={() => {
+                setPublishError(null);
+                setPublishPhase("confirm");
+              }}
+              onCancel={() => setPublishPhase("idle")}
+              onConfirm={runPublishLibrary}
+              onAcknowledgeDone={() => {
+                setPublishPhase("idle");
+                setPublishProgress(null);
+                setPublishSummary(null);
+              }}
+            />
           </div>
 
           {error && <div className="mt-2 text-alert text-xs">{error}</div>}

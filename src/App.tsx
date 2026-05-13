@@ -18,13 +18,23 @@ import {
 const DB_FILTERS = [{ name: "SQLite", extensions: ["db", "sqlite"] }];
 
 const DEFAULT_RELAYS = [
-  "wss://relay.damus.io",
+  "wss://relay.fizx.uk",
   "wss://nos.lol",
   "wss://relay.primal.net",
 ];
 
 const RELAYS_STORAGE_KEY = "ndisc.relays";
 const LEGACY_RELAYS_STORAGE_KEY = "disco-vault.relays";
+
+// One-shot relay migration: damus rate-limits batch publish. Swap it for the
+// self-hosted fizx.uk relay if the user has damus stored and hasn't already
+// added fizx themselves. Idempotent: after the swap neither condition matches.
+function migrateDamusToFizx(relays: string[]): string[] {
+  const damus = "wss://relay.damus.io";
+  const fizx = "wss://relay.fizx.uk";
+  if (!relays.includes(damus) || relays.includes(fizx)) return relays;
+  return relays.map((r) => (r === damus ? fizx : r));
+}
 
 export default function App() {
   const [selected, setSelected] = useState<Release | null>(null);
@@ -51,7 +61,7 @@ export default function App() {
               /* ignore */
             }
           }
-          return parsed;
+          return migrateDamusToFizx(parsed);
         }
       } catch {
         /* try next key */
@@ -64,6 +74,7 @@ export default function App() {
     query: "",
     medium: null,
     needsCoverOnly: false,
+    publishedFilter: null,
     count: 0,
   });
 

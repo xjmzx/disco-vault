@@ -18,9 +18,15 @@ export interface Release {
   coverArtUrl?: string | null;
   discogsId?: number | null;
   musicbrainzId?: string | null;
+  releaseType?: string | null;
+  category?: string | null;
+  lastPublishedAt?: number | null;
+  lastPublishedNaddr?: string | null;
   addedAt?: number | null;
   updatedAt?: number | null;
 }
+
+export type PublishedFilter = "published" | "unpublished";
 
 export interface Stats {
   total: number;
@@ -73,8 +79,14 @@ export async function listReleases(
   query?: string,
   medium?: "physical" | "digital",
   needsCover?: boolean,
+  publishedFilter?: PublishedFilter,
 ): Promise<Release[]> {
-  return invoke<Release[]>("list_releases", { query, medium, needsCover });
+  return invoke<Release[]>("list_releases", {
+    query,
+    medium,
+    needsCover,
+    publishedFilter,
+  });
 }
 
 export async function deleteRelease(id: number): Promise<void> {
@@ -86,6 +98,34 @@ export async function setCoverArtUrl(
   url: string | null,
 ): Promise<void> {
   return invoke("set_cover_art_url", { releaseId, url });
+}
+
+export async function setReleaseType(
+  releaseId: number,
+  value: string | null,
+): Promise<void> {
+  return invoke("set_release_type", { releaseId, value });
+}
+
+export async function setReleaseCategory(
+  releaseId: number,
+  value: string | null,
+): Promise<void> {
+  return invoke("set_release_category", { releaseId, value });
+}
+
+export async function setReleaseCountry(
+  releaseId: number,
+  value: string | null,
+): Promise<void> {
+  return invoke("set_release_country", { releaseId, value });
+}
+
+export async function setReleaseCondition(
+  releaseId: number,
+  value: string | null,
+): Promise<void> {
+  return invoke("set_release_condition", { releaseId, value });
 }
 
 export async function getStats(): Promise<Stats> {
@@ -258,6 +298,7 @@ export async function publishLibrary(
     query?: string;
     medium?: "physical" | "digital";
     needsCover?: boolean;
+    publishedFilter?: PublishedFilter;
   },
 ): Promise<PublishLibrarySummary> {
   return invoke<PublishLibrarySummary>("publish_library", {
@@ -265,5 +306,6 @@ export async function publishLibrary(
     query: filter?.query,
     medium: filter?.medium,
     needsCover: filter?.needsCover,
+    publishedFilter: filter?.publishedFilter,
   });
 }

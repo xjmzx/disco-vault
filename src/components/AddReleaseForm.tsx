@@ -22,6 +22,8 @@ const EMPTY: Release = {
   notes: "",
   source: "",
   coverArtUrl: "",
+  releaseType: "music",
+  category: "",
 };
 
 export function AddReleaseForm({ onAdded }: Props) {
@@ -63,6 +65,20 @@ export function AddReleaseForm({ onAdded }: Props) {
           value={(release.medium ?? "physical") as Medium}
           onChange={(m) => set("medium", m)}
         />
+        <div className={ROW}>
+          <span className="text-muted text-right">type</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <TypeSelect
+              value={release.releaseType ?? ""}
+              onChange={(v) => set("releaseType", v)}
+            />
+            <span className="text-muted text-xs">category</span>
+            <CategorySelect
+              value={release.category ?? ""}
+              onChange={(v) => set("category", v)}
+            />
+          </div>
+        </div>
         <Field
           label="artist"
           value={release.artist}
@@ -331,6 +347,95 @@ function FormatSelect({
         {FORMAT_OPTIONS.map((f) => (
           <option key={f} value={f}>
             {f}
+          </option>
+        ))}
+      </select>
+      <ChevronDown
+        size={12}
+        strokeWidth={2.5}
+        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted
+                   pointer-events-none"
+      />
+    </div>
+  );
+}
+
+const TYPE_OPTIONS = [
+  "music",
+  "sample",
+  "stem",
+  "field-recording",
+  "message",
+  "other",
+];
+
+const CATEGORY_OPTIONS = [
+  "album",
+  "ep",
+  "single",
+  "compilation",
+  "mix",
+  "live",
+  "soundtrack",
+  "bootleg",
+  "miscellaneous",
+];
+
+function TypeSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="relative w-fit">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="type"
+        className="appearance-none pl-2.5 pr-7 py-1 rounded-md bg-surface
+                   text-fg outline-none border border-transparent
+                   focus:border-accent/50 cursor-pointer text-xs"
+      >
+        <option value="">—</option>
+        {TYPE_OPTIONS.map((t) => (
+          <option key={t} value={t}>
+            {t}
+          </option>
+        ))}
+      </select>
+      <ChevronDown
+        size={12}
+        strokeWidth={2.5}
+        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted
+                   pointer-events-none"
+      />
+    </div>
+  );
+}
+
+function CategorySelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="relative w-fit">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label="category"
+        className="appearance-none pl-2.5 pr-7 py-1 rounded-md bg-surface
+                   text-fg outline-none border border-transparent
+                   focus:border-accent/50 cursor-pointer text-xs"
+      >
+        <option value="">—</option>
+        {CATEGORY_OPTIONS.map((c) => (
+          <option key={c} value={c}>
+            {c}
           </option>
         ))}
       </select>

@@ -26,9 +26,12 @@ multi-database switcher in the header.
   in a single SQLite transaction; emits progress events. Idempotent on
   re-import (skip by `file_path`).
 - **Discogs CSV import** for physical releases. Maps the standard
-  Discogs collection export (13 columns) onto the schema; auto-detects
-  digital (`*File*` formats) vs physical; idempotent on `discogs_id`
-  so re-exporting and re-importing is safe.
+  Discogs collection export onto the schema (artist / title / format /
+  label / catalog / country / condition / released year / release id);
+  auto-detects digital (`*File*` formats) vs physical; auto-infers
+  `category` from the Format string (`Album` → `album`, `EP` → `ep`,
+  …); synthesises `source` as `https://www.discogs.com/release/<id>`.
+  Idempotent on `discogs_id` so re-exporting and re-importing is safe.
 - **Multi-DB switching** in the app header: refresh / open existing /
   create new. The chosen path persists at `<app_data>/config.json`.
 
@@ -65,14 +68,24 @@ multi-database switcher in the header.
   resolved from your published `kind:0` metadata appear in the panel
   when logged in.
 - **Publish a release** as a `kind:31237` parameterized-replaceable
-  event with the schema below. Result panel shows per-relay accepted /
-  rejected and the resulting NIP-19 `naddr1…` with copy + view buttons.
+  event with the schema below. The release-detail action row shows
+  the abbreviated `naddr1qq…` inline with adjacent copy + njump.me
+  buttons; a one-line feedback strip below reports per-relay accepted
+  / rejected.
 - **Publish library** wraps the whole catalogue: confirmation step
   with an "irreversible" warning, then sends each release with a 50ms
-  throttle and live progress events. Summary tiles at the end.
+  throttle and live progress events. Honours the same filters as the
+  list (medium / search / no-cover / published-state).
 - **Unpublish** issues a NIP-09 `kind:5` deletion request — relays
   that honour the spec remove the orphaned event. Useful for cleaning
   up wrong data on the network without leaving artefacts.
+- **Publish-state persistence**: on accepted publish, ndisc records
+  `last_published_at` and the resulting `naddr` against the release
+  row, so copy / njump.me buttons stay active across app restarts.
+  Unpublish clears these. A `published / unpublished` filter in the
+  releases toolbar lets you sweep through the rest of the library and
+  the right-hand count shows `N · X published · Y unpublished` of the
+  current filter.
 
 ### Refresh from disk
 
@@ -108,13 +121,19 @@ releases (
   label, catalog_number, country, condition, notes, source,
   file_path, cover_art_path, cover_art_url,
   discogs_id, musicbrainz_id,
+  release_type, category,
+  last_published_at, last_published_naddr,
   added_at, updated_at
 )
 ```
 
 `medium` is `'physical' | 'digital'`. Indexes on `artist`, `title`,
-`year`, `medium`. `cover_art_url` is added via `ALTER TABLE` migration
-so existing DBs upgrade in place.
+`year`, `medium`. New columns (cover_art_url, release_type, category,
+last_published_at, last_published_naddr) are added via `ALTER TABLE`
+migration so existing DBs upgrade in place. `source` is normalised to
+an http(s) URL on import (Discogs CSV synthesises
+`https://www.discogs.com/release/<id>`); legacy keyword values from
+older builds are converted on first open.
 
 ## Install dependencies (Debian / Ubuntu)
 
@@ -242,6 +261,8 @@ events addressable across the rename.
 | `d`         | yes      | Stable per-release identifier (`disco-vault:<id>`) |
 | `title`     | yes      | Album / release title |
 | `artist`    | yes      | Primary artist (album-level) |
+| `type`      | no       | Broad audio classification: `music` (default for imports) / `sample` / `stem` / `field-recording` / `message` / `other` |
+| `category`  | no       | Release type, mostly for `type=music`: `album` / `ep` / `single` / `compilation` / `mix` / `live` / `soundtrack` / `bootleg` / `miscellaneous` |
 | `medium`    | yes      | `"physical"` or `"digital"` |
 | `format`    | no       | `LP`, `CD`, `FLAC 24/96`, `MP3 320`, … |
 | `year`      | no       | 4-digit `YYYY` |
@@ -249,6 +270,7 @@ events addressable across the rename.
 | `catalog`   | no       | Catalog number |
 | `country`   | no       | ISO 2-letter or free text |
 | `condition` | no       | Physical-only: `M`, `NM`, `VG+`, … |
+| `source`    | no       | http(s) URL pointing at the listing (Discogs, Bandcamp, label store, …). Only emitted when the value is a real URL — legacy non-URL values are silently dropped on the way out. |
 | `i`         | repeat   | NIP-73 external IDs, e.g. `discogs:release:12345`, `musicbrainz:release:<uuid>` |
 | `t`         | repeat   | Hashtag / genre |
 | `image`     | no       | Cover art URL — square image, served by nostr.build, Blossom, or any HTTPS host (relays do not store binaries) |

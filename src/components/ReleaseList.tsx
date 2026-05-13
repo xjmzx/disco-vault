@@ -24,6 +24,7 @@ import {
   type ImportProgress,
   type LibraryScanSummary,
   type OrphanInfo,
+  type PublishedFilter,
   type Release,
   type RescanSummary,
 } from "../lib/tauri";
@@ -34,6 +35,7 @@ export interface FilterContext {
   query: string;
   medium: "physical" | "digital" | null;
   needsCoverOnly: boolean;
+  publishedFilter: PublishedFilter | null;
   count: number;
 }
 
@@ -55,6 +57,8 @@ export function ReleaseList({
   const [query, setQuery] = useState("");
   const [medium, setMedium] = useState<MediumFilter>("");
   const [needsCoverOnly, setNeedsCoverOnly] = useState(false);
+  const [publishedFilter, setPublishedFilter] =
+    useState<"" | PublishedFilter>("");
   const [items, setItems] = useState<Release[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -286,6 +290,7 @@ export function ReleaseList({
         query,
         medium || undefined,
         needsCoverOnly ? true : undefined,
+        publishedFilter || undefined,
       );
       setItems(list);
     } catch (e) {
@@ -298,7 +303,7 @@ export function ReleaseList({
   useEffect(() => {
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reloadKey, medium, needsCoverOnly]);
+  }, [reloadKey, medium, needsCoverOnly, publishedFilter]);
 
   // Bubble filter state + visible-items count up so other panels (like the
   // Nostr Sync publish-library button) can render contextual UI.
@@ -308,9 +313,17 @@ export function ReleaseList({
       query,
       medium: medium === "" ? null : medium,
       needsCoverOnly,
+      publishedFilter: publishedFilter === "" ? null : publishedFilter,
       count: items.length,
     });
-  }, [query, medium, needsCoverOnly, items.length, onFilterChange]);
+  }, [
+    query,
+    medium,
+    needsCoverOnly,
+    publishedFilter,
+    items.length,
+    onFilterChange,
+  ]);
 
   // When the no-cover filter is turned on, autofocus the first row's URL
   // input once the list has loaded.
@@ -334,6 +347,11 @@ export function ReleaseList({
     setAutoFocusPending(false);
   }, [items, autoFocusPending]);
 
+  const publishedCount = items.filter(
+    (r) => r.lastPublishedAt != null,
+  ).length;
+  const unpublishedCount = items.length - publishedCount;
+
   return (
     <Section
       title="Releases"
@@ -341,6 +359,12 @@ export function ReleaseList({
       right={
         <span className="text-xs text-muted">
           {items.length} {items.length === 1 ? "release" : "releases"}
+          {items.length > 0 && (
+            <>
+              <span className="ml-1">· {publishedCount} published</span>
+              <span className="ml-1">· {unpublishedCount} unpublished</span>
+            </>
+          )}
           {needsCoverOnly && (
             <span className="ml-1 text-warn">· no cover</span>
           )}
@@ -382,6 +406,28 @@ export function ReleaseList({
             size={12}
             strokeWidth={2.5}
             className="absolute right-2 top-1/2 -translate-y-1/2 text-bg
+                       pointer-events-none"
+          />
+        </div>
+        <div className="relative">
+          <select
+            value={publishedFilter}
+            onChange={(e) =>
+              setPublishedFilter(e.target.value as "" | PublishedFilter)
+            }
+            title="Filter by Nostr publish state"
+            className="appearance-none pl-2.5 pr-7 py-2 rounded-md bg-surface
+                       text-fg text-xs outline-none border border-transparent
+                       focus:border-accent/50 cursor-pointer"
+          >
+            <option value="">any</option>
+            <option value="published">published</option>
+            <option value="unpublished">unpublished</option>
+          </select>
+          <ChevronDown
+            size={12}
+            strokeWidth={2.5}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted
                        pointer-events-none"
           />
         </div>
@@ -628,7 +674,8 @@ export function ReleaseList({
       )}
 
       <ul className="mt-1 flex-1 overflow-auto rounded-md
-                     divide-y divide-surface/60 bg-bg/50 max-h-[70vh]
+                     divide-y divide-surface/60 bg-bg/50
+                     max-h-[calc(100vh-310px)]
                      [scrollbar-gutter:stable]">
         {items.length === 0 && !loading && !error && (
           <li className="px-3 py-3 text-muted text-xs">

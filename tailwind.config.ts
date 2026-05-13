@@ -6,10 +6,12 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Catppuccin Mocha — same palette as bpm-tapper, FLAC browser, smpl-tool
-        bg: "#1e1e2e",
-        panel: "#181825",
-        surface: "#313244",
+        // Catppuccin Mocha — same palette as bpm-tapper, FLAC browser, smpl-tool.
+        // `bg` is pure black for the outer page surround; `panel` keeps the
+        // Catppuccin base tone for the actual content cards.
+        bg: "#000000",
+        panel: "#0e0e18",
+        surface: "#232434",
         surfaceHover: "#45475a",
         fg: "#cdd6f4",
         muted: "#6c7086",
