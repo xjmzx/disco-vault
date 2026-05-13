@@ -71,12 +71,16 @@ jobs:
             echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Publish GitHub Release (draft)
+      # Publishes the release directly (not as a draft) so the assets land
+      # on the tagged release in one step — no duplicate-record cleanup later.
+      # The `prerelease` flag is auto-set from the tag: anything with a hyphen
+      # (v0.1.0-beta, v0.2.0-rc.1) is a pre-release; plain `vX.Y.Z` isn't.
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ${{ steps.tag.outputs.tag }}
-          draft: true
+          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
           generate_release_notes: true
           files: |
             src-tauri/target/release/bundle/appimage/*.AppImage
