@@ -154,8 +154,11 @@ export async function scanDiscogsCsv(path: string): Promise<ScanDiscogsReport> {
   return invoke<ScanDiscogsReport>("scan_discogs_csv", { path });
 }
 
-export async function importDiscogsCsv(path: string): Promise<ImportSummary> {
-  return invoke<ImportSummary>("import_discogs_csv", { path });
+export async function importDiscogsCsv(
+  path: string,
+  mediumFilter?: "physical" | "digital",
+): Promise<ImportSummary> {
+  return invoke<ImportSummary>("import_discogs_csv", { path, mediumFilter });
 }
 
 // --- Embedded cover-art extraction ------------------------------------------

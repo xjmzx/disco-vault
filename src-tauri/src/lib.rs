@@ -2378,6 +2378,8 @@ fn scan_discogs_csv(path: String) -> Result<ScanDiscogsReport, String> {
 fn import_discogs_csv(
     app: tauri::AppHandle,
     path: String,
+    // "physical" | "digital" to import only that medium; None imports both.
+    medium_filter: Option<String>,
 ) -> Result<ImportSummary, String> {
     let mut reader = csv::Reader::from_path(&path).map_err(|e| e.to_string())?;
 
@@ -2458,6 +2460,15 @@ fn import_discogs_csv(
         }
 
         let medium = medium_from_format(format);
+
+        // Skip rows that don't match the requested medium, if one was given.
+        if let Some(ref want) = medium_filter {
+            if medium != want.as_str() {
+                summary.skipped += 1;
+                continue;
+            }
+        }
+
         let format_opt = nonempty(format);
         let category = category_from_discogs_format(format);
 

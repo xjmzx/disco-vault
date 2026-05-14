@@ -44,6 +44,10 @@ export function LibraryPanel({ reloadKey, onImported }: Props) {
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [last, setLast] = useState<ImportSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Discogs-only: which media to import from the CSV.
+  const [mediumFilter, setMediumFilter] = useState<
+    "both" | "physical" | "digital"
+  >("both");
 
   function reset() {
     setPhase("idle");
@@ -52,6 +56,7 @@ export function LibraryPanel({ reloadKey, onImported }: Props) {
     setProgress(null);
     setLast(null);
     setError(null);
+    setMediumFilter("both");
   }
 
   async function pickFolder() {
@@ -142,7 +147,10 @@ export function LibraryPanel({ reloadKey, onImported }: Props) {
       const summary =
         scan.kind === "folder"
           ? await importDirectory(pickedPath)
-          : await importDiscogsCsv(pickedPath);
+          : await importDiscogsCsv(
+              pickedPath,
+              mediumFilter === "both" ? undefined : mediumFilter,
+            );
       setLast(summary);
       setPhase("done");
       onImported();
@@ -155,6 +163,17 @@ export function LibraryPanel({ reloadKey, onImported }: Props) {
   }
 
   // --- Render ---------------------------------------------------------------
+  // How many rows the Import button will actually take in, given the
+  // Discogs medium filter.
+  const discogsImportCount =
+    scan?.kind === "discogs"
+      ? mediumFilter === "physical"
+        ? scan.report.physical
+        : mediumFilter === "digital"
+          ? scan.report.digital
+          : scan.report.totalRows
+      : 0;
+
   const inlineStats = stats ? (
     <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm items-center">
       <StatBadge label="Total" value={String(stats.total)} />
@@ -206,23 +225,49 @@ export function LibraryPanel({ reloadKey, onImported }: Props) {
               <ScanStat label="size" value={formatBytes(scan.report.totalBytes)} />
             </div>
           ) : (
-            <div className="mt-2 grid grid-cols-4 gap-2 text-xs">
-              <ScanStat label="rows" value={scan.report.totalRows.toLocaleString()} />
-              <ScanStat label="physical" value={scan.report.physical.toLocaleString()} tone="ok" />
-              <ScanStat label="digital" value={scan.report.digital.toLocaleString()} tone="ok" />
-              <ScanStat label="w/ cond" value={scan.report.withCondition.toLocaleString()} tone="muted" />
-            </div>
+            <>
+              <div className="mt-2 grid grid-cols-4 gap-2 text-xs">
+                <ScanStat label="rows" value={scan.report.totalRows.toLocaleString()} />
+                <ScanStat label="physical" value={scan.report.physical.toLocaleString()} tone="ok" />
+                <ScanStat label="digital" value={scan.report.digital.toLocaleString()} tone="ok" />
+                <ScanStat label="w/ cond" value={scan.report.withCondition.toLocaleString()} tone="muted" />
+              </div>
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-[10px] uppercase tracking-wide text-muted">
+                  import
+                </span>
+                <div className="flex rounded-md overflow-hidden border border-surface">
+                  {(["both", "physical", "digital"] as const).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setMediumFilter(m)}
+                      className={
+                        "px-2.5 py-1 text-xs capitalize transition-colors " +
+                        (mediumFilter === m
+                          ? "bg-accent text-bg font-semibold"
+                          : "bg-surface text-fg hover:bg-surfaceHover")
+                      }
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
           )}
           <div className="mt-3 flex gap-2">
             <button
               onClick={runImport}
+              disabled={scan.kind === "discogs" && discogsImportCount === 0}
               className="px-4 py-2 rounded-md bg-accent text-bg font-semibold
-                         hover:opacity-90 flex items-center gap-2 text-xs"
+                         hover:opacity-90 disabled:opacity-50
+                         disabled:cursor-not-allowed flex items-center gap-2
+                         text-xs"
             >
               <Play size={14} /> Import{" "}
               {(scan.kind === "folder"
                 ? scan.report.totalDirs
-                : scan.report.totalRows
+                : discogsImportCount
               ).toLocaleString()}{" "}
               {scan.kind === "folder" ? "releases" : "rows"}
             </button>
