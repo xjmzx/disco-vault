@@ -12,7 +12,7 @@ use lofty::file::{AudioFile, TaggedFileExt};
 use lofty::probe::Probe;
 use lofty::tag::ItemKey;
 use nostr_sdk::prelude::*;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
@@ -1476,6 +1476,169 @@ async fn publish_library(
     Ok(summary)
 }
 
+// Backfill local publish state from what relays already hold. Read-only on the
+// relay side: no events are signed or sent. For each kind:31237 event authored
+// by our key, the `d` tag maps back to a local release id; releases that have
+// no publish markers get them written from the event's own created_at.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanEvent {
+    pub id: i64,
+    pub artist: String,
+    pub title: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconcileSummary {
+    pub events_found: usize,
+    pub matched: usize,
+    pub updated: usize,
+    pub already_marked: usize,
+    pub unmatched: usize,
+    // Relay events whose d-tag maps to no local release — typically left
+    // behind when the DB was rebuilt and release ids shifted.
+    pub orphans: Vec<OrphanEvent>,
+}
+
+// First value of a named tag on an event, e.g. tag_value(ev, "artist").
+fn tag_value<'a>(event: &'a Event, name: &str) -> Option<&'a str> {
+    event.tags.iter().find_map(|t| {
+        let s = t.as_slice();
+        if s.len() >= 2 && s[0] == name {
+            Some(s[1].as_str())
+        } else {
+            None
+        }
+    })
+}
+
+#[tauri::command]
+async fn reconcile_published(
+    app: tauri::AppHandle,
+    relays: Vec<String>,
+) -> Result<ReconcileSummary, String> {
+    if relays.is_empty() {
+        return Err("no relays configured".into());
+    }
+    let nsec = load_nsec()?.ok_or_else(|| "no Nostr identity stored".to_string())?;
+    let keys = keys_from_nsec(&nsec)?;
+    let pubkey = keys.public_key();
+
+    let client = build_client(keys.clone(), &relays).await;
+    // Fetch release events and our own deletions together — a non-compliant
+    // relay may still serve a release we have already deleted, so we need the
+    // kind:5 events to filter those back out (NIP-09).
+    let filter = Filter::new()
+        .author(pubkey)
+        .kinds([Kind::Custom(KIND_RELEASE), Kind::EventDeletion]);
+    let fetch = client.fetch_events(filter, Duration::from_secs(10)).await;
+    let _ = client.shutdown().await;
+    let events = fetch.map_err(|e| e.to_string())?;
+
+    // Release ids the user has deleted, parsed from kind:5 `a` tags of the
+    // form "<kind>:<pubkey>:disco-vault:<id>".
+    let mut deleted: HashSet<i64> = HashSet::new();
+    for event in events.iter() {
+        if event.kind != Kind::EventDeletion {
+            continue;
+        }
+        for tag in event.tags.iter() {
+            let s = tag.as_slice();
+            if s.len() >= 2 && s[0] == "a" {
+                if let Some(d) = s[1].splitn(3, ':').nth(2) {
+                    if let Some(id_str) = d.strip_prefix("disco-vault:") {
+                        if let Ok(id) = id_str.parse::<i64>() {
+                            deleted.insert(id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Newest release event per id, skipping any the user has deleted.
+    // Replaceable events should be unique per d-tag, but relays can briefly
+    // carry stale copies — hence keeping the newest created_at wins.
+    let mut latest: HashMap<i64, &Event> = HashMap::new();
+    for event in events.iter() {
+        if event.kind != Kind::Custom(KIND_RELEASE) {
+            continue;
+        }
+        let Some(d) = event.tags.identifier() else {
+            continue;
+        };
+        let Some(id_str) = d.strip_prefix("disco-vault:") else {
+            continue;
+        };
+        let Ok(id) = id_str.parse::<i64>() else {
+            continue;
+        };
+        if deleted.contains(&id) {
+            continue;
+        }
+        latest
+            .entry(id)
+            .and_modify(|e| {
+                if event.created_at > e.created_at {
+                    *e = event;
+                }
+            })
+            .or_insert(event);
+    }
+
+    let mut summary = ReconcileSummary {
+        events_found: latest.len(),
+        matched: 0,
+        updated: 0,
+        already_marked: 0,
+        unmatched: 0,
+        orphans: Vec::new(),
+    };
+
+    let conn = open(&app)?;
+    for (id, event) in latest {
+        let existing: Option<Option<i64>> = conn
+            .query_row(
+                "SELECT last_published_at FROM releases WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        match existing {
+            None => {
+                summary.unmatched += 1;
+                summary.orphans.push(OrphanEvent {
+                    id,
+                    artist: tag_value(event, "artist").unwrap_or("").to_string(),
+                    title: tag_value(event, "title").unwrap_or("").to_string(),
+                });
+            }
+            Some(Some(_)) => {
+                summary.matched += 1;
+                summary.already_marked += 1;
+            }
+            Some(None) => {
+                summary.matched += 1;
+                let naddr = build_naddr(&keys, &release_d_tag(id), &relays)
+                    .unwrap_or_default();
+                conn.execute(
+                    "UPDATE releases
+                     SET last_published_at = ?1, last_published_naddr = ?2
+                     WHERE id = ?3",
+                    params![event.created_at.as_u64() as i64, naddr, id],
+                )
+                .map_err(|e| e.to_string())?;
+                summary.updated += 1;
+            }
+        }
+    }
+
+    summary.orphans.sort_by_key(|o| o.id);
+    Ok(summary)
+}
+
 // ---------------------------------------------------------------------------
 // Local library import (digital releases)
 // ---------------------------------------------------------------------------
@@ -2528,7 +2691,8 @@ pub fn run() {
             clear_keypair,
             publish_release,
             publish_library,
-            unpublish_release
+            unpublish_release,
+            reconcile_published
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

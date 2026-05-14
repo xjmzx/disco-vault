@@ -6,6 +6,7 @@ import {
   ImageOff,
   MoreVertical,
   RefreshCw,
+  SatelliteDish,
   ScanLine,
   Search,
   Wand2,
@@ -17,16 +18,20 @@ import {
   deleteRelease,
   extractEmbeddedCovers,
   listReleases,
+  reconcilePublished,
   rescanLocalCovers,
   scanLibraryChanges,
   setCoverArtUrl,
+  unpublishRelease,
   updateReleasePath,
   type ExtractSummary,
   type ImportProgress,
   type LabelFilter,
   type LibraryScanSummary,
+  type OrphanEvent,
   type OrphanInfo,
   type PublishedFilter,
+  type ReconcileSummary,
   type Release,
   type RescanSummary,
 } from "../lib/tauri";
@@ -47,6 +52,7 @@ interface Props {
   onSelect: (r: Release) => void;
   selected: Release | null;
   onFilterChange?: (ctx: FilterContext) => void;
+  relays: string[];
 }
 
 type MediumFilter = "" | "physical" | "digital";
@@ -56,6 +62,7 @@ export function ReleaseList({
   onSelect,
   selected,
   onFilterChange,
+  relays,
 }: Props) {
   const [query, setQuery] = useState("");
   const [medium, setMedium] = useState<MediumFilter>("");
@@ -76,13 +83,14 @@ export function ReleaseList({
   // Cover-cleanup background ops. Extract reads embedded artwork from audio
   // file tags; rescan walks album directories for a wider set of cover
   // filename patterns.
-  type OpKind = "extract" | "rescan" | "scan";
+  type OpKind = "extract" | "rescan" | "scan" | "reconcile";
   const [activeOp, setActiveOp] = useState<OpKind | null>(null);
   const [opProgress, setOpProgress] = useState<ImportProgress | null>(null);
   const [opSummary, setOpSummary] = useState<
     | { kind: "extract"; data: ExtractSummary }
     | { kind: "rescan"; data: RescanSummary }
     | { kind: "scan"; data: LibraryScanSummary }
+    | { kind: "reconcile"; data: ReconcileSummary }
     | null
   >(null);
 
@@ -121,6 +129,35 @@ export function ReleaseList({
 
   async function runBackgroundOp(kind: OpKind) {
     if (activeOp !== null) return;
+
+    // Reconcile is a network op, not a filesystem walk — no progress events,
+    // a different summary shape, so it takes its own short path.
+    if (kind === "reconcile") {
+      const yes = await ask(
+        "Fetch your published releases from the configured relays and " +
+          "backfill local publish state?\n\n" +
+          "Read-only on the relay side — no events are signed or sent. " +
+          "Releases that relays already hold but the local DB still marks " +
+          "as unpublished get their publish state restored.",
+        { title: "Reconcile published state", kind: "info" },
+      );
+      if (!yes) return;
+      setActiveOp("reconcile");
+      setOpSummary(null);
+      setOpProgress(null);
+      setError(null);
+      try {
+        const data = await reconcilePublished(relays);
+        setOpSummary({ kind: "reconcile", data });
+        await reload();
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setActiveOp(null);
+      }
+      return;
+    }
+
     const config =
       kind === "extract"
         ? {
@@ -276,6 +313,40 @@ export function ReleaseList({
         };
       });
       await reload();
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function unpublishOrphan(
+    e: React.MouseEvent,
+    orphan: OrphanEvent,
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+    const label =
+      [orphan.artist, orphan.title].filter(Boolean).join(" — ") ||
+      `disco-vault:${orphan.id}`;
+    const yes = await ask(
+      `Delete the stale Nostr event for "${label}"?\n\n` +
+        `This release has no local row (id ${orphan.id}) — the event is ` +
+        `left over from a DB rebuild that shifted release ids. A kind:5 ` +
+        `deletion will be sent to your relays to remove it.`,
+      { title: "Unpublish orphan", kind: "warning" },
+    );
+    if (!yes) return;
+    try {
+      await unpublishRelease(orphan.id, relays);
+      setOpSummary((prev) => {
+        if (!prev || prev.kind !== "reconcile") return prev;
+        return {
+          kind: "reconcile",
+          data: {
+            ...prev.data,
+            orphans: prev.data.orphans.filter((o) => o.id !== orphan.id),
+          },
+        };
+      });
     } catch (err) {
       setError(String(err));
     }
@@ -554,6 +625,17 @@ export function ReleaseList({
                   runBackgroundOp("scan");
                 }}
               />
+              <MaintMenuItem
+                icon={<SatelliteDish size={14} />}
+                label="Reconcile published state"
+                detail="Backfill publish markers from relays"
+                active={activeOp === "reconcile"}
+                disabled={activeOp !== null}
+                onClick={() => {
+                  setMaintMenuOpen(false);
+                  runBackgroundOp("reconcile");
+                }}
+              />
             </div>
           )}
         </div>
@@ -605,6 +687,14 @@ export function ReleaseList({
           <div className="mt-1 text-[10px] font-mono text-fg/60 truncate">
             {opProgress.currentDir}
           </div>
+        </div>
+      )}
+
+      {activeOp === "reconcile" && (
+        <div className="mt-2 px-3 py-2 rounded-md bg-surface/40 text-xs
+                        text-muted flex items-center gap-2">
+          <SatelliteDish size={12} className="animate-pulse text-accent" />
+          contacting relays — fetching published releases…
         </div>
       )}
 
@@ -674,14 +764,43 @@ export function ReleaseList({
                 )}
               </>
             )}
-            {opSummary.data.errors.length > 0 && (
-              <span className="text-alert">
-                errors{" "}
-                <span className="font-mono">
-                  {opSummary.data.errors.length}
+            {opSummary.kind === "reconcile" && (
+              <>
+                <span className="text-ok">
+                  restored{" "}
+                  <span className="font-mono">{opSummary.data.updated}</span>
                 </span>
-              </span>
+                <span className="text-muted">
+                  already marked{" "}
+                  <span className="font-mono">
+                    {opSummary.data.alreadyMarked}
+                  </span>
+                </span>
+                <span className="text-muted">
+                  on relays{" "}
+                  <span className="font-mono">
+                    {opSummary.data.eventsFound}
+                  </span>
+                </span>
+                {opSummary.data.unmatched > 0 && (
+                  <span className="text-warn">
+                    no local match{" "}
+                    <span className="font-mono">
+                      {opSummary.data.unmatched}
+                    </span>
+                  </span>
+                )}
+              </>
             )}
+            {opSummary.kind !== "reconcile" &&
+              opSummary.data.errors.length > 0 && (
+                <span className="text-alert">
+                  errors{" "}
+                  <span className="font-mono">
+                    {opSummary.data.errors.length}
+                  </span>
+                </span>
+              )}
           </div>
           <button
             onClick={() => setOpSummary(null)}
@@ -739,6 +858,47 @@ export function ReleaseList({
           </ul>
         </details>
       )}
+
+      {!activeOp &&
+        opSummary?.kind === "reconcile" &&
+        opSummary.data.orphans.length > 0 && (
+          <details className="mt-2 px-3 py-2 rounded-md bg-surface/40">
+            <summary className="text-warn cursor-pointer text-xs">
+              {opSummary.data.orphans.length} orphan
+              {opSummary.data.orphans.length === 1 ? "" : "s"} — published on
+              relays, no local release
+            </summary>
+            <ul className="mt-2 max-h-64 overflow-auto space-y-1 text-[10px]">
+              {opSummary.data.orphans.map((o) => (
+                <li
+                  key={o.id}
+                  className="px-2 py-1 rounded bg-bg/50 flex items-start gap-2"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="text-fg">
+                      {o.artist || "—"}{" "}
+                      <span className="text-muted">·</span> {o.title || "—"}
+                    </div>
+                    <div className="text-muted font-mono">
+                      disco-vault:{o.id}
+                    </div>
+                  </div>
+                  <div className="shrink-0">
+                    <button
+                      onClick={(e) => unpublishOrphan(e, o)}
+                      className="px-2 py-1 rounded bg-mauve/15 text-mauve
+                                 hover:bg-mauve hover:text-bg text-[10px]
+                                 font-medium transition-colors"
+                      title="Send a kind:5 deletion to remove this stale event from your relays"
+                    >
+                      Unpublish
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
 
       <ul className="mt-1 flex-1 overflow-auto rounded-md
                      divide-y divide-surface/60 bg-bg/50

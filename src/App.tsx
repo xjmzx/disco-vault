@@ -191,6 +191,7 @@ export default function App() {
             selected={selected}
             onSelect={setSelected}
             onFilterChange={setFilterContext}
+            relays={relays}
           />
         </div>
         <div className="grid grid-cols-1 gap-2 content-start">

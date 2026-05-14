@@ -224,6 +224,27 @@ export async function scanLibraryChanges(): Promise<LibraryScanSummary> {
   return invoke<LibraryScanSummary>("scan_library_changes");
 }
 
+export interface OrphanEvent {
+  id: number;
+  artist: string;
+  title: string;
+}
+
+export interface ReconcileSummary {
+  eventsFound: number;
+  matched: number;
+  updated: number;
+  alreadyMarked: number;
+  unmatched: number;
+  orphans: OrphanEvent[];
+}
+
+export async function reconcilePublished(
+  relays: string[],
+): Promise<ReconcileSummary> {
+  return invoke<ReconcileSummary>("reconcile_published", { relays });
+}
+
 export interface CoverSyncResult {
   status: string;
   written: string | null;
