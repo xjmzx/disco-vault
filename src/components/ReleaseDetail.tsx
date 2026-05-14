@@ -25,6 +25,7 @@ import {
   setReleaseCategory,
   setReleaseCondition,
   setReleaseCountry,
+  setReleaseLabel,
   setReleaseType,
   syncCoverToDisk,
   unpublishRelease,
@@ -348,6 +349,12 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
     onChanged({ ...release, condition: v });
   }
 
+  async function onChangeLabel(v: string | null) {
+    if (!release.id) return;
+    await setReleaseLabel(release.id, v);
+    onChanged({ ...release, label: v });
+  }
+
   const primaryFields: [string, unknown][] = [
     ["year", release.year],
     ["medium", release.medium],
@@ -414,6 +421,13 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
           ariaLabel="category"
           placeholder="category"
           width="w-32"
+        />
+        <EditableText
+          value={release.label ?? null}
+          onChange={onChangeLabel}
+          ariaLabel="label"
+          placeholder="label"
+          width="w-44"
         />
         <EditableText
           value={release.country ?? null}

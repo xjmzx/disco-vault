@@ -400,6 +400,24 @@ fn set_release_condition(
     Ok(())
 }
 
+#[tauri::command]
+fn set_release_label(
+    app: tauri::AppHandle,
+    release_id: i64,
+    value: Option<String>,
+) -> Result<(), String> {
+    let normalized = normalize_field(value);
+    let conn = open(&app)?;
+    conn.execute(
+        "UPDATE releases
+         SET label = ?1, updated_at = strftime('%s','now')
+         WHERE id = ?2",
+        params![normalized, release_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn row_to_release(row: &rusqlite::Row) -> rusqlite::Result<Release> {
     Ok(Release {
         id: row.get(0)?,
@@ -441,6 +459,7 @@ fn list_releases(
     medium: Option<String>,
     needs_cover: Option<bool>,
     published_filter: Option<String>,
+    label_filter: Option<String>,
 ) -> Result<Vec<Release>, String> {
     let conn = open(&app)?;
     let q = query.unwrap_or_default();
@@ -462,6 +481,12 @@ fn list_releases(
         _ => "",
     };
 
+    let label_clause = match label_filter.as_deref() {
+        Some("with_label") => "AND label IS NOT NULL AND label <> ''",
+        Some("without_label") => "AND (label IS NULL OR label = '')",
+        _ => "",
+    };
+
     let select_sql = format!(
         "SELECT {cols}
          FROM releases
@@ -470,10 +495,12 @@ fn list_releases(
            AND (?3 IS NULL OR medium = ?3)
            {cover}
            {published}
+           {label}
          ORDER BY artist COLLATE NOCASE, year, title COLLATE NOCASE",
         cols = RELEASE_SELECT_COLS,
         cover = cover_filter,
         published = published_clause,
+        label = label_clause,
     );
     let mut stmt = conn
         .prepare(&select_sql)
@@ -563,6 +590,19 @@ fn refresh_release(
     app: tauri::AppHandle,
     release_id: i64,
 ) -> Result<RefreshResult, String> {
+    // Per-release Refresh is an explicit "trust the file" action — so it
+    // overwrites label with whatever the tag now says (or clears it if the
+    // tag is gone). Batch scan callers go through refresh_release_inner with
+    // overwrite_label = false to keep curated Discogs labels and bulk-set
+    // values safe from accidental rewrites.
+    refresh_release_inner(app, release_id, true)
+}
+
+fn refresh_release_inner(
+    app: tauri::AppHandle,
+    release_id: i64,
+    overwrite_label: bool,
+) -> Result<RefreshResult, String> {
     let conn = open(&app)?;
     let sql = format!(
         "SELECT {} FROM releases WHERE id = ?1",
@@ -621,6 +661,27 @@ fn refresh_release(
     } else {
         release.format.clone()
     };
+    // Two modes for label:
+    //   overwrite_label = true  (per-release Refresh) — file tag wins, so
+    //     editing the GROUPING tag and hitting Refresh propagates the change.
+    //     A now-empty tag clears the DB value too.
+    //   overwrite_label = false (batch Scan library) — only fill when the DB
+    //     value is empty. Protects curated Discogs labels and prior backfills
+    //     from getting clobbered by drift in local tags.
+    let new_label = if overwrite_label {
+        info.label.clone()
+    } else {
+        let current_label_empty = release
+            .label
+            .as_deref()
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true);
+        if current_label_empty {
+            info.label.clone().or_else(|| release.label.clone())
+        } else {
+            release.label.clone()
+        }
+    };
     let new_cover_path = find_cover(&dir).or_else(|| release.cover_art_path.clone());
 
     let mut changes: Vec<String> = Vec::new();
@@ -635,6 +696,9 @@ fn refresh_release(
     }
     if new_format_str != release.format {
         changes.push("format".into());
+    }
+    if new_label != release.label {
+        changes.push("label".into());
     }
     if new_cover_path != release.cover_art_path {
         changes.push("cover_art_path".into());
@@ -653,14 +717,16 @@ fn refresh_release(
              title = ?2,
              year = ?3,
              format = ?4,
-             cover_art_path = ?5,
+             label = ?5,
+             cover_art_path = ?6,
              updated_at = strftime('%s','now')
-         WHERE id = ?6",
+         WHERE id = ?7",
         params![
             new_artist,
             new_title,
             new_year,
             new_format_str,
+            new_label,
             new_cover_path,
             release_id,
         ],
@@ -749,7 +815,7 @@ fn scan_library_changes(
             },
         );
 
-        match refresh_release(app.clone(), *release_id) {
+        match refresh_release_inner(app.clone(), *release_id, false) {
             Ok(result) => match result.status.as_str() {
                 "ok" => summary.refreshed += 1,
                 "no_changes" => summary.no_changes += 1,
@@ -1266,6 +1332,7 @@ async fn publish_library(
     medium: Option<String>,
     needs_cover: Option<bool>,
     published_filter: Option<String>,
+    label_filter: Option<String>,
 ) -> Result<PublishLibrarySummary, String> {
     if relays.is_empty() {
         return Err("no relays configured".into());
@@ -1289,6 +1356,11 @@ async fn publish_library(
             Some("unpublished") => "AND last_published_at IS NULL",
             _ => "",
         };
+        let label_clause = match label_filter.as_deref() {
+            Some("with_label") => "AND label IS NOT NULL AND label <> ''",
+            Some("without_label") => "AND (label IS NULL OR label = '')",
+            _ => "",
+        };
         let sql = format!(
             "SELECT {cols}
              FROM releases
@@ -1297,10 +1369,12 @@ async fn publish_library(
                AND (?3 IS NULL OR medium = ?3)
                {cover}
                {published}
+               {label}
              ORDER BY artist COLLATE NOCASE, year, title COLLATE NOCASE",
             cols = RELEASE_SELECT_COLS,
             cover = cover_filter,
             published = published_clause,
+            label = label_clause,
         );
         let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
         let rows = stmt
@@ -1690,6 +1764,11 @@ struct DirInfo {
     artist: Option<String>,
     title: Option<String>,
     year: Option<i32>,
+    // Record label, read from the "Grouping" tag first (FLAC GROUPING / ID3
+    // TIT1 / MP4 ©grp — surfaced as Grouping in iTunes-style players) and
+    // falling back to the canonical "Label" tag (FLAC LABEL or ORGANIZATION /
+    // ID3 TPUB / MP4 ©pub).
+    label: Option<String>,
     codec: Option<String>,
     bit_depth: Option<u8>,
     sample_rate: Option<u32>,
@@ -1701,6 +1780,7 @@ fn read_dir_tags(files: &[PathBuf]) -> DirInfo {
         artist: None,
         title: None,
         year: None,
+        label: None,
         codec: None,
         bit_depth: None,
         sample_rate: None,
@@ -1736,6 +1816,13 @@ fn read_dir_tags(files: &[PathBuf]) -> DirInfo {
                     .or_else(|| tag.get_string(&ItemKey::OriginalReleaseDate))
                     .and_then(|s| s.get(..4).and_then(|p| p.parse::<i32>().ok()));
             }
+            if info.label.is_none() {
+                info.label = tag
+                    .get_string(&ItemKey::ContentGroup)
+                    .or_else(|| tag.get_string(&ItemKey::Label))
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty());
+            }
         }
         let props = tagged.properties();
         if info.codec.is_none() {
@@ -1756,6 +1843,7 @@ fn read_dir_tags(files: &[PathBuf]) -> DirInfo {
         if info.artist.is_some()
             && info.title.is_some()
             && info.year.is_some()
+            && info.label.is_some()
             && info.codec.is_some()
         {
             break;
@@ -1878,10 +1966,18 @@ fn import_directory(app: tauri::AppHandle, root: String) -> Result<ImportSummary
 
         match tx.execute(
             "INSERT INTO releases
-             (artist, title, year, medium, format, file_path, cover_art_path,
-              release_type)
-             VALUES (?1, ?2, ?3, 'digital', ?4, ?5, ?6, 'music')",
-            params![artist, title, info.year, format, dir_str, cover],
+             (artist, title, year, medium, format, label, file_path,
+              cover_art_path, release_type)
+             VALUES (?1, ?2, ?3, 'digital', ?4, ?5, ?6, ?7, 'music')",
+            params![
+                artist,
+                title,
+                info.year,
+                format,
+                info.label,
+                dir_str,
+                cover,
+            ],
         ) {
             Ok(_) => summary.imported += 1,
             Err(e) => summary.errors.push(format!("{}: {}", dir.display(), e)),
@@ -2412,6 +2508,7 @@ pub fn run() {
             set_release_category,
             set_release_country,
             set_release_condition,
+            set_release_label,
             list_releases,
             delete_release,
             get_stats,

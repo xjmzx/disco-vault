@@ -28,6 +28,7 @@ interface FilterContext {
   medium: "physical" | "digital" | null;
   needsCoverOnly: boolean;
   publishedFilter: "published" | "unpublished" | null;
+  labelFilter: "with_label" | "without_label" | null;
   count: number;
 }
 
@@ -52,7 +53,8 @@ function isFilterActive(f: FilterContext): boolean {
     f.query.trim() !== "" ||
     f.medium !== null ||
     f.needsCoverOnly ||
-    f.publishedFilter !== null
+    f.publishedFilter !== null ||
+    f.labelFilter !== null
   );
 }
 
@@ -60,6 +62,8 @@ function describeFilter(f: FilterContext): string {
   const parts: string[] = [];
   if (f.medium) parts.push(f.medium);
   if (f.publishedFilter) parts.push(f.publishedFilter);
+  if (f.labelFilter === "with_label") parts.push("has label");
+  if (f.labelFilter === "without_label") parts.push("no label");
   if (f.query.trim()) parts.push(`search "${f.query.trim()}"`);
   if (f.needsCoverOnly) parts.push("no cover");
   return parts.join(", ");
@@ -230,6 +234,7 @@ export function NostrPanel({
               medium: filterContext.medium ?? undefined,
               needsCover: filterContext.needsCoverOnly || undefined,
               publishedFilter: filterContext.publishedFilter ?? undefined,
+              labelFilter: filterContext.labelFilter ?? undefined,
             }
           : undefined,
       );

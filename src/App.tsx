@@ -75,6 +75,7 @@ export default function App() {
     medium: null,
     needsCoverOnly: false,
     publishedFilter: null,
+    labelFilter: null,
     count: 0,
   });
 

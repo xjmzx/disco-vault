@@ -27,6 +27,7 @@ export interface Release {
 }
 
 export type PublishedFilter = "published" | "unpublished";
+export type LabelFilter = "with_label" | "without_label";
 
 export interface Stats {
   total: number;
@@ -80,12 +81,14 @@ export async function listReleases(
   medium?: "physical" | "digital",
   needsCover?: boolean,
   publishedFilter?: PublishedFilter,
+  labelFilter?: LabelFilter,
 ): Promise<Release[]> {
   return invoke<Release[]>("list_releases", {
     query,
     medium,
     needsCover,
     publishedFilter,
+    labelFilter,
   });
 }
 
@@ -126,6 +129,13 @@ export async function setReleaseCondition(
   value: string | null,
 ): Promise<void> {
   return invoke("set_release_condition", { releaseId, value });
+}
+
+export async function setReleaseLabel(
+  releaseId: number,
+  value: string | null,
+): Promise<void> {
+  return invoke("set_release_label", { releaseId, value });
 }
 
 export async function getStats(): Promise<Stats> {
@@ -299,6 +309,7 @@ export async function publishLibrary(
     medium?: "physical" | "digital";
     needsCover?: boolean;
     publishedFilter?: PublishedFilter;
+    labelFilter?: LabelFilter;
   },
 ): Promise<PublishLibrarySummary> {
   return invoke<PublishLibrarySummary>("publish_library", {
@@ -307,5 +318,6 @@ export async function publishLibrary(
     medium: filter?.medium,
     needsCover: filter?.needsCover,
     publishedFilter: filter?.publishedFilter,
+    labelFilter: filter?.labelFilter,
   });
 }

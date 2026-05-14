@@ -4,6 +4,7 @@ import {
   Disc3,
   FolderSearch,
   ImageOff,
+  MoreVertical,
   RefreshCw,
   ScanLine,
   Search,
@@ -22,6 +23,7 @@ import {
   updateReleasePath,
   type ExtractSummary,
   type ImportProgress,
+  type LabelFilter,
   type LibraryScanSummary,
   type OrphanInfo,
   type PublishedFilter,
@@ -36,6 +38,7 @@ export interface FilterContext {
   medium: "physical" | "digital" | null;
   needsCoverOnly: boolean;
   publishedFilter: PublishedFilter | null;
+  labelFilter: LabelFilter | null;
   count: number;
 }
 
@@ -59,6 +62,7 @@ export function ReleaseList({
   const [needsCoverOnly, setNeedsCoverOnly] = useState(false);
   const [publishedFilter, setPublishedFilter] =
     useState<"" | PublishedFilter>("");
+  const [labelFilter, setLabelFilter] = useState<"" | LabelFilter>("");
   const [items, setItems] = useState<Release[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,6 +85,31 @@ export function ReleaseList({
     | { kind: "scan"; data: LibraryScanSummary }
     | null
   >(null);
+
+  // Maintenance ops live behind a kebab to keep the toolbar from crowding the
+  // search input. Click-outside + Escape close the popover.
+  const [maintMenuOpen, setMaintMenuOpen] = useState(false);
+  const maintMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!maintMenuOpen) return;
+    function onDown(e: MouseEvent) {
+      if (
+        maintMenuRef.current &&
+        !maintMenuRef.current.contains(e.target as Node)
+      ) {
+        setMaintMenuOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMaintMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [maintMenuOpen]);
 
   function setDraft(id: number, value: string) {
     setDrafts((prev) => {
@@ -291,6 +320,7 @@ export function ReleaseList({
         medium || undefined,
         needsCoverOnly ? true : undefined,
         publishedFilter || undefined,
+        labelFilter || undefined,
       );
       setItems(list);
     } catch (e) {
@@ -303,7 +333,7 @@ export function ReleaseList({
   useEffect(() => {
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reloadKey, medium, needsCoverOnly, publishedFilter]);
+  }, [reloadKey, medium, needsCoverOnly, publishedFilter, labelFilter]);
 
   // Bubble filter state + visible-items count up so other panels (like the
   // Nostr Sync publish-library button) can render contextual UI.
@@ -314,6 +344,7 @@ export function ReleaseList({
       medium: medium === "" ? null : medium,
       needsCoverOnly,
       publishedFilter: publishedFilter === "" ? null : publishedFilter,
+      labelFilter: labelFilter === "" ? null : labelFilter,
       count: items.length,
     });
   }, [
@@ -321,6 +352,7 @@ export function ReleaseList({
     medium,
     needsCoverOnly,
     publishedFilter,
+    labelFilter,
     items.length,
     onFilterChange,
   ]);
@@ -383,7 +415,7 @@ export function ReleaseList({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && reload()}
-            placeholder="search artist / title / label / catalog #"
+            placeholder="search …"
             className="w-full pl-7 pr-3 py-2 rounded-md bg-surface text-fg
                        placeholder:text-muted outline-none border border-transparent
                        focus:border-accent/50 text-xs"
@@ -394,11 +426,12 @@ export function ReleaseList({
           <select
             value={medium}
             onChange={(e) => setMedium(e.target.value as MediumFilter)}
+            title="Filter by medium"
             className="appearance-none pl-2.5 pr-7 py-2 rounded-md bg-accent text-bg
                        text-xs font-semibold outline-none border border-transparent
                        focus:border-fg/30 cursor-pointer"
           >
-            <option value="">all</option>
+            <option value="">Media</option>
             <option value="physical">physical</option>
             <option value="digital">digital</option>
           </select>
@@ -420,9 +453,29 @@ export function ReleaseList({
                        text-fg text-xs outline-none border border-transparent
                        focus:border-accent/50 cursor-pointer"
           >
-            <option value="">any</option>
+            <option value="">Status</option>
             <option value="published">published</option>
             <option value="unpublished">unpublished</option>
+          </select>
+          <ChevronDown
+            size={12}
+            strokeWidth={2.5}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted
+                       pointer-events-none"
+          />
+        </div>
+        <div className="relative">
+          <select
+            value={labelFilter}
+            onChange={(e) => setLabelFilter(e.target.value as "" | LabelFilter)}
+            title="Filter by presence of a record label"
+            className="appearance-none pl-2.5 pr-7 py-2 rounded-md bg-surface
+                       text-fg text-xs outline-none border border-transparent
+                       focus:border-accent/50 cursor-pointer"
+          >
+            <option value="">Label</option>
+            <option value="with_label">has label</option>
+            <option value="without_label">no label</option>
           </select>
           <ChevronDown
             size={12}
@@ -448,48 +501,62 @@ export function ReleaseList({
         >
           <ImageOff size={14} />
         </button>
-        <button
-          onClick={() => runBackgroundOp("extract")}
-          disabled={activeOp !== null}
-          className="p-2 rounded-md bg-surface hover:bg-surfaceHover text-fg
-                     disabled:opacity-50"
-          title="Extract embedded artwork from audio files (digital releases without a cover)"
-        >
-          <Wand2
-            size={14}
-            className={
-              activeOp === "extract" ? "animate-pulse text-accent" : ""
-            }
-          />
-        </button>
-        <button
-          onClick={() => runBackgroundOp("rescan")}
-          disabled={activeOp !== null}
-          className="p-2 rounded-md bg-surface hover:bg-surfaceHover text-fg
-                     disabled:opacity-50"
-          title="Scan album directories for cover image files (broader filename matching)"
-        >
-          <FolderSearch
-            size={14}
-            className={
-              activeOp === "rescan" ? "animate-pulse text-accent" : ""
-            }
-          />
-        </button>
-        <button
-          onClick={() => runBackgroundOp("scan")}
-          disabled={activeOp !== null}
-          className="p-2 rounded-md bg-surface hover:bg-surfaceHover text-fg
-                     disabled:opacity-50"
-          title="Scan library for changes — re-read tags + cover for every release with a file path"
-        >
-          <ScanLine
-            size={14}
-            className={
-              activeOp === "scan" ? "animate-pulse text-accent" : ""
-            }
-          />
-        </button>
+        <div className="relative" ref={maintMenuRef}>
+          <button
+            onClick={() => setMaintMenuOpen((v) => !v)}
+            className="p-2 rounded-md bg-surface hover:bg-surfaceHover text-fg"
+            title="Library maintenance"
+            aria-haspopup="menu"
+            aria-expanded={maintMenuOpen}
+          >
+            <MoreVertical
+              size={14}
+              className={activeOp ? "animate-pulse text-accent" : ""}
+            />
+          </button>
+          {maintMenuOpen && (
+            <div
+              role="menu"
+              className="absolute right-0 top-full mt-1 z-20 w-72
+                         rounded-md bg-panel border border-surface/60
+                         shadow-lg overflow-hidden text-xs"
+            >
+              <MaintMenuItem
+                icon={<Wand2 size={14} />}
+                label="Extract embedded artwork"
+                detail="Pull cover art from digital releases"
+                active={activeOp === "extract"}
+                disabled={activeOp !== null}
+                onClick={() => {
+                  setMaintMenuOpen(false);
+                  runBackgroundOp("extract");
+                }}
+              />
+              <MaintMenuItem
+                icon={<FolderSearch size={14} />}
+                label="Rescan local covers"
+                detail="Scan and match local files and dirs"
+                active={activeOp === "rescan"}
+                disabled={activeOp !== null}
+                onClick={() => {
+                  setMaintMenuOpen(false);
+                  runBackgroundOp("rescan");
+                }}
+              />
+              <MaintMenuItem
+                icon={<ScanLine size={14} />}
+                label="Scan library for changes"
+                detail="Re-read tags and cover art"
+                active={activeOp === "scan"}
+                disabled={activeOp !== null}
+                onClick={() => {
+                  setMaintMenuOpen(false);
+                  runBackgroundOp("scan");
+                }}
+              />
+            </div>
+          )}
+        </div>
         <button
           onClick={reload}
           disabled={loading}
@@ -798,5 +865,51 @@ export function ReleaseList({
         })}
       </ul>
     </Section>
+  );
+}
+
+interface MaintMenuItemProps {
+  icon: React.ReactNode;
+  label: string;
+  detail: string;
+  active: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}
+
+function MaintMenuItem({
+  icon,
+  label,
+  detail,
+  active,
+  disabled,
+  onClick,
+}: MaintMenuItemProps) {
+  return (
+    <button
+      role="menuitem"
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        "w-full flex items-start gap-2.5 px-3 py-2 text-left",
+        "border-b border-surface/60 last:border-b-0",
+        "hover:bg-surface/60 disabled:opacity-50 disabled:cursor-not-allowed",
+      )}
+    >
+      <span
+        className={cn(
+          "mt-0.5 shrink-0",
+          active ? "text-accent animate-pulse" : "text-muted",
+        )}
+      >
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-fg">{label}</span>
+        <span className="block text-[10px] text-muted leading-snug mt-0.5">
+          {detail}
+        </span>
+      </span>
+    </button>
   );
 }
