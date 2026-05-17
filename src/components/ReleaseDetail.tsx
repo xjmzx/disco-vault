@@ -434,14 +434,14 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
           onChange={onChangeLabel}
           ariaLabel="label"
           placeholder="label"
-          width="w-44"
+          width="w-40"
         />
         <EditableText
           value={release.catalogNumber ?? null}
           onChange={onChangeCatalogNumber}
           ariaLabel="catalog"
           placeholder="catalog"
-          width="w-32"
+          width="w-28"
         />
         <EditableText
           value={release.country ?? null}
