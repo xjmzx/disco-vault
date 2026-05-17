@@ -418,6 +418,24 @@ fn set_release_label(
     Ok(())
 }
 
+#[tauri::command]
+fn set_release_catalog_number(
+    app: tauri::AppHandle,
+    release_id: i64,
+    value: Option<String>,
+) -> Result<(), String> {
+    let normalized = normalize_field(value);
+    let conn = open(&app)?;
+    conn.execute(
+        "UPDATE releases
+         SET catalog_number = ?1, updated_at = strftime('%s','now')
+         WHERE id = ?2",
+        params![normalized, release_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn row_to_release(row: &rusqlite::Row) -> rusqlite::Result<Release> {
     Ok(Release {
         id: row.get(0)?,
@@ -2683,6 +2701,7 @@ pub fn run() {
             set_release_country,
             set_release_condition,
             set_release_label,
+            set_release_catalog_number,
             list_releases,
             delete_release,
             get_stats,

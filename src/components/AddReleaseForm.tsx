@@ -467,11 +467,14 @@ function ConditionSelect({
                    focus:border-accent/50 cursor-pointer text-xs"
       >
         <option value="">—</option>
-        {CONDITION_OPTIONS.map((c) => (
-          <option key={c} value={c}>
-            {c}
-          </option>
-        ))}
+        {CONDITION_OPTIONS.map((c) => {
+          const m = c.match(/\(([^)]+)\)\s*$/);
+          return (
+            <option key={c} value={c}>
+              {m ? m[1] : c}
+            </option>
+          );
+        })}
       </select>
       <ChevronDown
         size={12}

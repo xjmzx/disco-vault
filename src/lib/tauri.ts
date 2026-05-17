@@ -138,6 +138,13 @@ export async function setReleaseLabel(
   return invoke("set_release_label", { releaseId, value });
 }
 
+export async function setReleaseCatalogNumber(
+  releaseId: number,
+  value: string | null,
+): Promise<void> {
+  return invoke("set_release_catalog_number", { releaseId, value });
+}
+
 export async function getStats(): Promise<Stats> {
   return invoke<Stats>("get_stats");
 }

@@ -22,6 +22,7 @@ import {
   publishRelease,
   refreshRelease,
   setCoverArtUrl,
+  setReleaseCatalogNumber,
   setReleaseCategory,
   setReleaseCondition,
   setReleaseCountry,
@@ -355,6 +356,12 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
     onChanged({ ...release, label: v });
   }
 
+  async function onChangeCatalogNumber(v: string | null) {
+    if (!release.id) return;
+    await setReleaseCatalogNumber(release.id, v);
+    onChanged({ ...release, catalogNumber: v });
+  }
+
   const primaryFields: [string, unknown][] = [
     ["year", release.year],
     ["medium", release.medium],
@@ -428,6 +435,13 @@ export function ReleaseDetail({ release, relays, onDeleted, onChanged }: Props) 
           ariaLabel="label"
           placeholder="label"
           width="w-44"
+        />
+        <EditableText
+          value={release.catalogNumber ?? null}
+          onChange={onChangeCatalogNumber}
+          ariaLabel="catalog"
+          placeholder="catalog"
+          width="w-32"
         />
         <EditableText
           value={release.country ?? null}
@@ -706,7 +720,7 @@ function EditableEnum({
         <option value="">{placeholder}</option>
         {options.map((o) => (
           <option key={o} value={o}>
-            {o}
+            {displayFn ? displayFn(o) : o}
           </option>
         ))}
       </select>
